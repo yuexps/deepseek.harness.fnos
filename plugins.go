@@ -868,14 +868,32 @@ func launchPluginOp(cmd *pluginCommand, doneMsg string) {
 	}()
 }
 
+// validatePluginExecution 校验待执行的插件操作指令合规性
+func validatePluginExecution(cmd *pluginCommand) error {
+	switch cmd.Verb {
+	case pluginAdd:
+		for _, spec := range cmd.Specs {
+			if err := checkDuplicatePlugin(spec); err != nil {
+				return err
+			}
+		}
+	case pluginRemove:
+		for _, spec := range cmd.Specs {
+			if IsProtectedPlugin(spec) {
+				return fmt.Errorf("核心基础设施插件「%s」受到保护，禁止卸载", spec)
+			}
+		}
+	}
+	return nil
+}
+
+// pluginPreviewError 输入框实时解析校验（输入框限制仅支持 add，并复用底层业务校验）
 func pluginPreviewError(cmd *pluginCommand) string {
 	if cmd.Verb != pluginAdd {
 		return "输入框仅支持安装（add）。更新/卸载请在下方已安装插件列表中操作"
 	}
-	for _, spec := range cmd.Specs {
-		if err := checkDuplicatePlugin(spec); err != nil {
-			return err.Error()
-		}
+	if err := validatePluginExecution(cmd); err != nil {
+		return err.Error()
 	}
 	return ""
 }
@@ -920,8 +938,8 @@ func handlePluginRun(c *gin.Context) {
 		Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if reason := pluginPreviewError(cmd); reason != "" {
-		Fail(c, http.StatusBadRequest, reason)
+	if err := validatePluginExecution(cmd); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := setPluginRunning(); err != nil {

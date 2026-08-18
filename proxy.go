@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -434,6 +435,10 @@ func startReverseProxyLocked() error {
 	proxyTLS = tlsCfg
 
 	errHandler := func(w http.ResponseWriter, r *http.Request, err error) {
+		// 过滤客户端主动断开连接/取消请求的正常行为
+		if errors.Is(err, context.Canceled) || errors.Is(r.Context().Err(), context.Canceled) || strings.Contains(err.Error(), "context canceled") {
+			return
+		}
 		LogWarning("反向代理转发错误 [%s]: %s", proxyAddr, err)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusBadGateway)
@@ -527,13 +532,14 @@ func startReverseProxyLocked() error {
 }
 
 func isExpectedCloseErr(err error) bool {
-	if err == nil || err == http.ErrServerClosed || err == net.ErrClosed || err == cmux.ErrListenerClosed || err == cmux.ErrServerClosed {
+	if err == nil || err == http.ErrServerClosed || err == net.ErrClosed || err == cmux.ErrListenerClosed || err == cmux.ErrServerClosed || errors.Is(err, context.Canceled) {
 		return true
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "use of closed network connection") ||
 		strings.Contains(msg, "server closed") ||
-		strings.Contains(msg, "closed network connection")
+		strings.Contains(msg, "closed network connection") ||
+		strings.Contains(msg, "context canceled")
 }
 
 func stopReverseProxy() {
