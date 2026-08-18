@@ -256,8 +256,13 @@ func Start() error {
 	return startLocked()
 }
 
-// dshCliCmd 动态解析 dsh 运行命令，失败时以 pnpm 兜底
+// dshCliCmd 优先直接执行编译后的 CLI 入口，其次解析 package.json，失败时以 pnpm 兜底
 func dshCliCmd(subArgs ...string) (string, []string) {
+	cliBinJs := filepath.Join(srcDir, "apps", "cli", "lib", "bin.js")
+	if _, err := os.Stat(cliBinJs); err == nil {
+		return nodeBin(), append([]string{cliBinJs}, subArgs...)
+	}
+
 	pkgPath := filepath.Join(srcDir, "package.json")
 	if data, err := os.ReadFile(pkgPath); err == nil {
 		var pkg struct {

@@ -2,6 +2,12 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: '是否发布到 GitHub Release'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -27,7 +33,7 @@ jobs:
 
       - name: Fetch and Prebuild Upstream Harness (amd64)
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
+          sudo apt-get update && sudo apt-get install -y musl-tools build-essential
           mkdir -p /tmp/upstream
           git clone --depth=1 https://github.com/deepseek-ai/deepseek-harness.git /tmp/upstream/deepseek-harness
           cd /tmp/upstream/deepseek-harness
@@ -36,15 +42,111 @@ jobs:
           echo "$UPSTREAM_VER" > /tmp/version.txt
           echo "Upstream deepseek-harness version: $UPSTREAM_VER"
           
-          # 打包纯源码包（不含 node_modules 与编译产物）
+          # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
+          git sparse-checkout set packages apps vendor native patches scripts website
+          
+          # 打包纯源码包（仅含编译所需全量源码与构建配置，不含 node_modules 与非运行文档）
           cd /tmp/upstream
           tar --numeric-owner -czf /tmp/deepseek-harness-source.tar.gz deepseek-harness
           
-          # 执行完整预构建并打包预构建包
+          # 执行完整构建并编译 Landlock 原生沙箱组件
           cd /tmp/upstream/deepseek-harness
-          pnpm install --no-frozen-lockfile --package-import-method=copy
+          pnpm install --no-frozen-lockfile
           pnpm run build
-          pnpm --filter @deepseek-ai/node-addon-landlock-run-workspace run build:native || true
+          cd native/landlock-run
+          pnpm run build:native
+          cd ../..
+          
+          # 清理构建增量缓存
+          find . -name "*.tsbuildinfo" -delete
+          
+          # 动态闭包剪枝：从 @deepseek-ai/dsh (apps/cli) 递归分析依赖图，动态清理未被引用的 dev 子包
+          node - <<'NODE'
+          const fs = require('fs'), path = require('path')
+          function readP(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null } }
+          const allMembers = new Map()
+          function collect(dir) {
+            if (!fs.existsSync(dir)) return
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!e.isDirectory() || e.name === 'node_modules' || e.name === '.git' ||
+                  e.name === 'fixtures' || e.name === 'tests') continue
+              const sub = path.join(dir, e.name)
+              const pj = path.join(sub, 'package.json')
+              if (fs.existsSync(pj)) {
+                const p = readP(pj)
+                if (p && p.name) allMembers.set(p.name, sub)
+              }
+              collect(sub)
+            }
+          }
+          for (const r of ['packages', 'apps', 'vendor', 'native']) collect(r)
+
+          const used = new Set()
+          function visit(name) {
+            if (used.has(name)) return
+            used.add(name)
+            const dir = allMembers.get(name)
+            if (!dir) return
+            const p = readP(path.join(dir, 'package.json'))
+            if (!p) return
+            for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+              if (!p[k]) continue
+              for (const dep in p[k]) if (allMembers.has(dep)) visit(dep)
+            }
+          }
+          visit('@deepseek-ai/dsh')
+
+          let removed = 0
+          for (const [name, dir] of allMembers) {
+            if (used.has(name)) continue
+            if (dir.includes('/fixtures/') || dir.includes('/tests/')) continue
+            if (name.includes('landlock-run-workspace') || dir.startsWith('native/landlock-run/packages/')) continue
+            fs.rmSync(dir, { recursive: true, force: true })
+            removed++
+            console.log('rm unused member:', dir, '[' + name + ']')
+          }
+          console.log('wave4: removed ' + removed + ' unused workspace members')
+          NODE
+          
+          # 清理根和保留 member 的 scripts 与 devDependencies
+          node - <<'NODE'
+          const fs = require('fs'), path = require('path')
+          {
+            const p = './package.json'
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'))
+            pkg.scripts = {}
+            delete pkg.devDependencies
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n')
+          }
+          function stripMember(dir) {
+            if (!fs.existsSync(dir)) return
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!e.isDirectory() || e.name === 'node_modules' || e.name === '.git') continue
+              const sub = path.join(dir, e.name)
+              const pj = path.join(sub, 'package.json')
+              if (fs.existsSync(pj)) {
+                const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'))
+                let touched = false
+                if (pkg.scripts && Object.keys(pkg.scripts).length) { pkg.scripts = {}; touched = true }
+                if (pkg.devDependencies) { delete pkg.devDependencies; touched = true }
+                if (touched) fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + '\n')
+              }
+              stripMember(sub)
+            }
+          }
+          for (const root of ['packages', 'apps', 'vendor']) stripMember(root)
+          NODE
+          
+          # 重装纯生产依赖（仅为核心闭包安装依赖）
+          rm -rf node_modules
+          CI=true pnpm install --prod \
+            --no-frozen-lockfile \
+            --config.confirmModulesPurge=false \
+            --config.dangerouslyAllowAllBuilds=true \
+            --config.minimumReleaseAge=0 \
+            --config.strictDepBuilds=false
+          
+          node packages/subprocess/subprocess-local/scripts/ensure-spawn-helper.mjs || true
           
           cd /tmp/upstream
           tar --numeric-owner -czf /tmp/deepseek-harness-amd64.tar.gz deepseek-harness
@@ -74,14 +176,111 @@ jobs:
 
       - name: Fetch and Prebuild Upstream Harness (arm64)
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
+          sudo apt-get update && sudo apt-get install -y musl-tools build-essential
           mkdir -p /tmp/upstream
           git clone --depth=1 https://github.com/deepseek-ai/deepseek-harness.git /tmp/upstream/deepseek-harness
           cd /tmp/upstream/deepseek-harness
           
-          pnpm install --no-frozen-lockfile --package-import-method=copy
+          # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
+          git sparse-checkout set packages apps vendor native patches scripts website
+          
+          # 执行完整构建并编译 Landlock 原生沙箱组件
+          pnpm install --no-frozen-lockfile
           pnpm run build
-          pnpm --filter @deepseek-ai/node-addon-landlock-run-workspace run build:native || true
+          cd native/landlock-run
+          pnpm run build:native
+          cd ../..
+          
+          # 清理构建增量缓存
+          find . -name "*.tsbuildinfo" -delete
+          
+          # 动态闭包剪枝：从 @deepseek-ai/dsh (apps/cli) 递归分析依赖图，动态清理未被引用的 dev 子包
+          node - <<'NODE'
+          const fs = require('fs'), path = require('path')
+          function readP(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null } }
+          const allMembers = new Map()
+          function collect(dir) {
+            if (!fs.existsSync(dir)) return
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!e.isDirectory() || e.name === 'node_modules' || e.name === '.git' ||
+                  e.name === 'fixtures' || e.name === 'tests') continue
+              const sub = path.join(dir, e.name)
+              const pj = path.join(sub, 'package.json')
+              if (fs.existsSync(pj)) {
+                const p = readP(pj)
+                if (p && p.name) allMembers.set(p.name, sub)
+              }
+              collect(sub)
+            }
+          }
+          for (const r of ['packages', 'apps', 'vendor', 'native']) collect(r)
+
+          const used = new Set()
+          function visit(name) {
+            if (used.has(name)) return
+            used.add(name)
+            const dir = allMembers.get(name)
+            if (!dir) return
+            const p = readP(path.join(dir, 'package.json'))
+            if (!p) return
+            for (const k of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+              if (!p[k]) continue
+              for (const dep in p[k]) if (allMembers.has(dep)) visit(dep)
+            }
+          }
+          visit('@deepseek-ai/dsh')
+
+          let removed = 0
+          for (const [name, dir] of allMembers) {
+            if (used.has(name)) continue
+            if (dir.includes('/fixtures/') || dir.includes('/tests/')) continue
+            if (name.includes('landlock-run-workspace') || dir.startsWith('native/landlock-run/packages/')) continue
+            fs.rmSync(dir, { recursive: true, force: true })
+            removed++
+            console.log('rm unused member:', dir, '[' + name + ']')
+          }
+          console.log('wave4: removed ' + removed + ' unused workspace members')
+          NODE
+          
+          # 清理根和保留 member 的 scripts 与 devDependencies
+          node - <<'NODE'
+          const fs = require('fs'), path = require('path')
+          {
+            const p = './package.json'
+            const pkg = JSON.parse(fs.readFileSync(p, 'utf8'))
+            pkg.scripts = {}
+            delete pkg.devDependencies
+            fs.writeFileSync(p, JSON.stringify(pkg, null, 2) + '\n')
+          }
+          function stripMember(dir) {
+            if (!fs.existsSync(dir)) return
+            for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!e.isDirectory() || e.name === 'node_modules' || e.name === '.git') continue
+              const sub = path.join(dir, e.name)
+              const pj = path.join(sub, 'package.json')
+              if (fs.existsSync(pj)) {
+                const pkg = JSON.parse(fs.readFileSync(pj, 'utf8'))
+                let touched = false
+                if (pkg.scripts && Object.keys(pkg.scripts).length) { pkg.scripts = {}; touched = true }
+                if (pkg.devDependencies) { delete pkg.devDependencies; touched = true }
+                if (touched) fs.writeFileSync(pj, JSON.stringify(pkg, null, 2) + '\n')
+              }
+              stripMember(sub)
+            }
+          }
+          for (const root of ['packages', 'apps', 'vendor']) stripMember(root)
+          NODE
+          
+          # 重装纯生产依赖（仅为核心闭包安装依赖）
+          rm -rf node_modules
+          CI=true pnpm install --prod \
+            --no-frozen-lockfile \
+            --config.confirmModulesPurge=false \
+            --config.dangerouslyAllowAllBuilds=true \
+            --config.minimumReleaseAge=0 \
+            --config.strictDepBuilds=false
+          
+          node packages/subprocess/subprocess-local/scripts/ensure-spawn-helper.mjs || true
           
           cd /tmp/upstream
           tar --numeric-owner -czf /tmp/deepseek-harness-arm64.tar.gz deepseek-harness
@@ -203,7 +402,36 @@ jobs:
           echo "upstream_ver=$UPSTREAM_VER" >> $GITHUB_OUTPUT
           echo "Release version: $APP_VER, Upstream version: $UPSTREAM_VER"
 
+      - name: Upload x86 Prebuilt FPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-x86-prebuilt
+          path: ./${{ env.BIN_NAME }}-x86-prebuilt.fpk
+          if-no-files-found: error
+
+      - name: Upload ARM Prebuilt FPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-arm-prebuilt
+          path: ./${{ env.BIN_NAME }}-arm-prebuilt.fpk
+          if-no-files-found: error
+
+      - name: Upload x86 Source FPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-x86
+          path: ./${{ env.BIN_NAME }}-x86.fpk
+          if-no-files-found: error
+
+      - name: Upload ARM Source FPK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-arm
+          path: ./${{ env.BIN_NAME }}-arm.fpk
+          if-no-files-found: error
+
       - name: Delete Existing Release and Tag (if exists)
+        if: ${{ github.event.inputs.publish_release == 'true' || github.event.inputs.publish_release == true }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -217,6 +445,7 @@ jobs:
           git tag -d "$TAG_NAME" 2>/dev/null || true
 
       - name: Create GitHub Release
+        if: ${{ github.event.inputs.publish_release == 'true' || github.event.inputs.publish_release == true }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "v${{ steps.manifest.outputs.version }}"
@@ -243,3 +472,90 @@ jobs:
             ${{ env.BIN_NAME }}-arm-prebuilt.fpk
             ${{ env.BIN_NAME }}-x86.fpk
             ${{ env.BIN_NAME }}-arm.fpk
+
+      - name: Update FnDepot fnpack.json
+        if: ${{ github.event.inputs.publish_release == 'true' || github.event.inputs.publish_release == true }}
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+          TAG_NAME: v${{ steps.manifest.outputs.version }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "未配置 GH_PAT secret，跳过更新 FnDepot。"
+            exit 0
+          fi
+
+          # 1. 计算安装包大小 (MB, 保留一位小数，均以 x86 为准)
+          PREBUILT_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86-prebuilt.fpk" | awk '{printf "%.1f", $5/1024/1024}')
+          SOURCE_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86.fpk" | awk '{printf "%.1f", $5/1024/1024}')
+          
+          # 2. 构造下载链接
+          PREBUILT_X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86-prebuilt.fpk"
+          PREBUILT_ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm-prebuilt.fpk"
+          
+          SOURCE_X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86.fpk"
+          SOURCE_ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm.fpk"
+          
+          # 3. 待同步更新的目标仓库列表
+          TARGET_REPOS=("yuexps/FnDepot" "shuangji66/FnDepot")
+
+          for REPO in "${TARGET_REPOS[@]}"; do
+            echo "----------------------------------------"
+            echo "Processing: $REPO"
+            REPO_DIR="repo_$(echo "$REPO" | tr '/' '_')"
+            
+            # yuexps/FnDepot 对应源码版，shuangji66/FnDepot 对应预构建版
+            if [ "$REPO" = "yuexps/FnDepot" ]; then
+              APP_SIZE="$SOURCE_SIZE"
+              X86_URL="$SOURCE_X86_URL"
+              ARM_URL="$SOURCE_ARM_URL"
+            else
+              APP_SIZE="$PREBUILT_SIZE"
+              X86_URL="$PREBUILT_X86_URL"
+              ARM_URL="$PREBUILT_ARM_URL"
+            fi
+            
+            echo "Updating $REPO -> Version: $VERSION, Size: $APP_SIZE"
+            
+            # 克隆目标仓库
+            git clone "https://x-access-token:${GH_PAT}@github.com/${REPO}.git" "$REPO_DIR" || {
+              echo "::warning::Clone $REPO failed, skipping."
+              continue
+            }
+            
+            pushd "$REPO_DIR" > /dev/null
+            
+            if [ -f "fnpack.json" ]; then
+              # 使用 jq 精确修改 deepseek.harness 对应字段
+              jq --arg ver "$VERSION" \
+                 --arg size "$APP_SIZE" \
+                 --arg x86_url "$X86_URL" \
+                 --arg arm_url "$ARM_URL" \
+                 '
+                 .["deepseek.harness"].version = $ver |
+                 .["deepseek.harness"].size = $size |
+                 .["deepseek.harness"].arch_diff.x86.download_url = $x86_url |
+                 .["deepseek.harness"].arch_diff.arm.download_url = $arm_url
+                 ' fnpack.json > fnpack.json.tmp && mv fnpack.json.tmp fnpack.json
+                 
+              # 配置 Git 信息并提交推送
+              git config user.name "github-actions[bot]"
+              git config user.email "github-actions[bot]@users.noreply.github.com"
+              
+              git add fnpack.json
+              if ! git diff --staged --quiet; then
+                git commit -m "chore: bump deepseek.harness to ${VERSION}"
+                BRANCH=$(git rev-parse --abbrev-ref HEAD)
+                git push "https://x-access-token:${GH_PAT}@github.com/${REPO}.git" "$BRANCH"
+                echo "Successfully updated $REPO ($BRANCH)"
+              else
+                echo "No changes detected in $REPO."
+              fi
+            else
+              echo "::warning::fnpack.json not found in $REPO."
+            fi
+            
+            popd > /dev/null
+          done
+
+

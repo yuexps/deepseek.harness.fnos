@@ -57,7 +57,8 @@ func update(forceRebuild bool) {
 	}
 
 	if forceRebuild {
-		state.SetStatus(StatusBuilding, "正在强制重建（重新安装依赖并全量编译）...")
+		state.SetStatus(StatusBuilding, "正在准备强制重建（恢复完整源码环境并重新安装依赖全量编译）...")
+		_ = gitCmd("-C", srcDir, "reset", "--hard", "HEAD").Run()
 	} else {
 		commitBefore := gitHead()
 		state.SetStatus(StatusBuilding, "正在拉取远程更新...")
@@ -93,6 +94,13 @@ func update(forceRebuild bool) {
 	restartService()
 }
 
+func configureSparseCheckout() error {
+	cmd := gitCmd("-C", srcDir, "sparse-checkout", "set", "packages", "apps", "vendor", "native", "patches", "scripts", "website")
+	cmd.Stdout = NewLogWriterInfo()
+	cmd.Stderr = NewLogWriterWarn()
+	return cmd.Run()
+}
+
 func gitClone() error {
 	_ = os.MkdirAll(filepath.Dir(srcDir), 0755)
 	cmd := gitCmd("clone", "--depth=1", repoURL, srcDir)
@@ -101,10 +109,12 @@ func gitClone() error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("git clone: %w", err)
 	}
+	_ = configureSparseCheckout()
 	return nil
 }
 
 func gitPull() error {
+	_ = configureSparseCheckout()
 	fetchCmd := gitCmd("-C", srcDir, "fetch", "--depth=1", "origin")
 	fetchCmd.Stdout = NewLogWriterInfo()
 	fetchCmd.Stderr = NewLogWriterWarn()
@@ -215,6 +225,14 @@ func buildLandlock() error {
 	LogInfo("开始编译 landlock 原生沙箱组件")
 	if err := ensureMusl(); err != nil {
 		return err
+	}
+	landlockDir := filepath.Join(srcDir, "native", "landlock-run")
+	if _, err := os.Stat(landlockDir); err == nil {
+		if err := runCmd(landlockDir, pnpmBin(), "run", "build:native"); err == nil {
+			bin := landlockBinPath()
+			LogInfo("landlock 原生沙箱组件构建完成: %s", bin)
+			return nil
+		}
 	}
 	if err := runCmd(srcDir, pnpmBin(), "--filter", "@deepseek-ai/node-addon-landlock-run-workspace", "run", "build:native"); err != nil {
 		return fmt.Errorf("landlock build:native: %w", err)
