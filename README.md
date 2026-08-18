@@ -6,10 +6,10 @@
 
 ## 主要功能
 
-- **服务控制**：支持启动、停止、重启、拉取更新与强制重建，内置进程组清理与看门狗巡检自愈。
-- **插件管理**：支持命令安装（npm 包 / GitHub 仓库）、压缩包上传、构建脚本自动放行（allowBuilds）、一键启停与卸载。
+- **服务控制**：支持启动、停止、重启、拉取更新与强制重建，内置进程组清理。
+- **插件管理**：支持命令安装（npm 包 / GitHub 仓库）、构建脚本自动放行（allowBuilds）、一键启停与卸载。
 - **工作区查看**：实时同步工作区列表、关联会话数及更新时间，支持在文件管理中一键定位目录。
-- **安全与网关**：支持飞牛统一网关、单端口 HTTP/HTTPS 自适应反代与外部自定义地址，提供访问密码鉴权与就绪状态引导。
+- **安全与网关**：支持飞牛统一网关、单端口 HTTP/HTTPS 自适应反代与外部自定义地址，提供访问密码鉴权。
 - **运行日志**：WebSocket 实时推送日志，支持语法高亮、自动滚动、日志轮转、清空与下载。
 - **应用设置**：支持配置服务端口、反向代理端口、打开方式、访问密码及网络代理，端口占用检测与热重载。
 
@@ -17,8 +17,8 @@
 
 ## 预览
 
-<img width="1777" height="1081" alt="87995bf50b86bee1d0ac74515d81ac31" src="https://github.com/user-attachments/assets/0260d94d-5049-4051-b1a9-4234dc7b058d" />
-<img width="1779" height="1085" alt="57af01f2a0d7f43b29d91750f6227f1c" src="https://github.com/user-attachments/assets/a32a1286-b5a2-4652-bec9-0f4e267ff6e3" />
+![应用概览](preview/02b0dcb3-30bc-4e06-bf23-abb1304dd854.png)
+![功能界面](preview/faed9fbf-1bfe-4108-9bb3-3384a100ace7.png)
 
 ---
 
@@ -38,13 +38,12 @@ deepseek.harness/
 ├── process.go          # 进程组控制、孤儿清理、端口等待与巡检自愈
 ├── build.go            # 源码拉取(Git/Zip)、GCC/Musl环境准备与构建
 ├── plugins.go          # 插件解析、安装、启停与安全校验
-├── allowbuilds.go      # 插件构建白名单管理
+├── profile.go          # 插件运行时补丁与构建策略管理 (cordis.patch.yml / allowBuilds)
 ├── workspace.go        # 工作区数据提取与文件监控
 ├── proxy.go            # 内置反向代理服务与访问认证
 ├── fngateway.go        # 飞牛网关直连反代与状态感知
 ├── api.go              # RESTful API 与 WebSocket 实时通道
-├── config.go           # 应用配置持久化
-├── env.go              # 全局运行环境变量与代理注入
+├── config.go           # 应用配置持久化与全局运行环境变量
 ├── logger.go           # 运行日志记录、轮转与增量订阅
 ├── main.go             # 程序入口与 Unix Socket 监听
 ├── templates/          # 独立内嵌页面模板 (//go:embed)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +14,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var patchFileMu sync.Mutex
+var npmNameStripRe = regexp.MustCompile(`^((?:@[a-z0-9-~][\w.-]*/)?[a-z0-9-~][\w.-]*)@.+$`)
 
-// 核心基础设施受保护模块正则（禁止被禁用或删除）
+func profileDirFor(name string) string {
+	return filepath.Join(pkgVarDir, "dsh-data", "profiles", name)
+}
+
+// normalizePluginKey 提取标准包名，去除 npm 版本号
+func normalizePluginKey(spec string) string {
+	if m := npmNameStripRe.FindStringSubmatch(spec); len(m) >= 2 {
+		return m[1]
+	}
+	return spec
+}
+
+// 核心受保护模块正则
 var protectedModulePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^cordis:`),
 	regexp.MustCompile(`^@deepseek-ai/cordis-plugin-`),
@@ -38,7 +51,7 @@ var protectedModulePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^@deepseek-ai/dsh-web-app`),
 }
 
-// IsProtectedPlugin 检查插件名或 ID 是否属于受保护的宿主基础设施
+// IsProtectedPlugin 检查是否为受保护的核心基础设施模块
 func IsProtectedPlugin(name string) bool {
 	if name == "" {
 		return false
@@ -51,7 +64,8 @@ func IsProtectedPlugin(name string) bool {
 	return false
 }
 
-// ProfileUserPatchPath 获取 profile 自身 cordis.patch.yml 绝对路径
+var patchFileMu sync.Mutex
+
 func ProfileUserPatchPath(profile string) string {
 	if profile == "" {
 		profile = "web"
@@ -59,7 +73,6 @@ func ProfileUserPatchPath(profile string) string {
 	return filepath.Join(profileDirFor(profile), "cordis.patch.yml")
 }
 
-// CordisPatchRow 表示 cordis.patch.yml 中的单个 patch 条目
 type CordisPatchRow struct {
 	ID       string                 `yaml:"id,omitempty"`
 	Name     string                 `yaml:"name,omitempty"`
@@ -68,7 +81,6 @@ type CordisPatchRow struct {
 	Insert   []CordisPatchRow       `yaml:"insert,omitempty"`
 }
 
-// ReadProfileUserPatch 读取并解析 profile 的 cordis.patch.yml
 func ReadProfileUserPatch(profile string) ([]CordisPatchRow, error) {
 	patchPath := ProfileUserPatchPath(profile)
 	data, err := os.ReadFile(patchPath)
@@ -89,7 +101,6 @@ func ReadProfileUserPatch(profile string) ([]CordisPatchRow, error) {
 	return rows, nil
 }
 
-// WriteProfileUserPatch 写入 profile 的 cordis.patch.yml
 func WriteProfileUserPatch(profile string, rows []CordisPatchRow) error {
 	patchPath := ProfileUserPatchPath(profile)
 	if err := os.MkdirAll(filepath.Dir(patchPath), 0755); err != nil {
@@ -97,7 +108,6 @@ func WriteProfileUserPatch(profile string, rows []CordisPatchRow) error {
 	}
 
 	if len(rows) == 0 {
-		// 清空文件或写空列表
 		return os.WriteFile(patchPath, []byte("[]\n"), 0644)
 	}
 
@@ -108,11 +118,10 @@ func WriteProfileUserPatch(profile string, rows []CordisPatchRow) error {
 	return os.WriteFile(patchPath, data, 0644)
 }
 
-// ExtractPluginEntryIDs 解析已安装插件的 Bundle Patch，提取其 Loader Entry ID 列表
+// ExtractPluginEntryIDs 解析插件 bundle patch 声明的 loader entry ID
 func ExtractPluginEntryIDs(profile, packageName string) []string {
 	var candidates []string
 
-	// 1. 优先读插件 package.json 中声明的 dsh.bundle.patch
 	pkgJsonPath := filepath.Join(profileDirFor(profile), "node_modules", packageName, "package.json")
 	data, err := os.ReadFile(pkgJsonPath)
 	if err == nil {
@@ -151,7 +160,7 @@ func ExtractPluginEntryIDs(profile, packageName string) []string {
 	return candidates
 }
 
-// ReadDisabledEntryMap 读取指定 profile 中已被标记为 disabled 的 entry id 集合
+// ReadDisabledEntryMap 读取指定 profile 中已被禁用的 entry id 集合
 func ReadDisabledEntryMap(profile string) (map[string]bool, error) {
 	patchFileMu.Lock()
 	defer patchFileMu.Unlock()
@@ -170,7 +179,7 @@ func ReadDisabledEntryMap(profile string) (map[string]bool, error) {
 	return res, nil
 }
 
-// SetPluginDisabled 在 profile 的 cordis.patch.yml 中设置插件 entry 的禁用/启用状态
+// SetPluginDisabled 在 cordis.patch.yml 中配置插件 entry 的启停状态
 func SetPluginDisabled(profile, packageName string, disabled bool) error {
 	if IsProtectedPlugin(packageName) {
 		return fmt.Errorf("核心基础设施插件 %q 受到保护，禁止更改启停状态", packageName)
@@ -201,7 +210,6 @@ func SetPluginDisabled(profile, packageName string, disabled bool) error {
 					r.Disabled = &val
 					newRows = append(newRows, r)
 				} else {
-					// 启用：若除 disabled 外没有其他自定义字段，则直接移除此 override 行以保持配置干净
 					if len(r.Config) == 0 && r.Name == "" && len(r.Insert) == 0 {
 						continue
 					}
@@ -227,7 +235,6 @@ func SetPluginDisabled(profile, packageName string, disabled bool) error {
 		return err
 	}
 
-	// 触发状态更新并记录日志
 	stateAction := "启用"
 	if disabled {
 		stateAction = "禁用"
@@ -236,7 +243,7 @@ func SetPluginDisabled(profile, packageName string, disabled bool) error {
 	return nil
 }
 
-// RemovePluginFromProfileUserPatch 彻底从 cordis.patch.yml 中物理剔除该插件的所有条目
+// RemovePluginFromProfileUserPatch 从 cordis.patch.yml 中物理移除该插件的所有条目
 func RemovePluginFromProfileUserPatch(profile, packageName string, entryIDs ...string) error {
 	patchFileMu.Lock()
 	defer patchFileMu.Unlock()
@@ -268,7 +275,228 @@ func RemovePluginFromProfileUserPatch(profile, packageName string, entryIDs ...s
 	return WriteProfileUserPatch(profile, newRows)
 }
 
-// 插件故障诊断记录器
+var (
+	blockedBuildsRe = regexp.MustCompile(`(?i)Ignored build scripts:\s*(.+)`)
+	pkgNameRe       = regexp.MustCompile(`^(@?[a-zA-Z0-9][\w.-]*(?:/[@a-zA-Z0-9][\w.-]*)?)@[0-9]`)
+)
+
+func profileWorkspaceYamlPathFor(name string) string {
+	return filepath.Join(profileDirFor(name), "pnpm-workspace.yaml")
+}
+
+func allowBuildsSidecarPath() string {
+	return filepath.Join(pkgVarDir, "plugins", "allowbuilds.json")
+}
+
+// parseBlockedPackages 从 pnpm 错误输出中提取被拦截构建脚本的包名
+func parseBlockedPackages(tail string) []string {
+	m := blockedBuildsRe.FindStringSubmatch(tail)
+	if len(m) < 2 {
+		return nil
+	}
+	var pkgs []string
+	for _, part := range strings.Split(m[1], ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if name := pkgNameRe.FindStringSubmatch(part); len(name) >= 2 {
+			pkgs = append(pkgs, name[1])
+		} else {
+			pkgs = append(pkgs, part)
+		}
+	}
+	return pkgs
+}
+
+func readAllowBuildsSidecar() map[string][]string {
+	m := map[string][]string{}
+	data, err := os.ReadFile(allowBuildsSidecarPath())
+	if err != nil {
+		return m
+	}
+	_ = json.Unmarshal(data, &m)
+	if m == nil {
+		m = map[string][]string{}
+	}
+	return m
+}
+
+func writeAllowBuildsSidecar(m map[string][]string) error {
+	if err := os.MkdirAll(filepath.Dir(allowBuildsSidecarPath()), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(allowBuildsSidecarPath(), data, 0644)
+}
+
+func yamlEntryName(trimmed string) string {
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "-") {
+		return ""
+	}
+	name := strings.SplitN(trimmed, ":", 2)[0]
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return name
+}
+
+// mergeAllowBuildsEntries 合并 allowBuilds 块，保留文件其余内容与注释
+func mergeAllowBuildsEntries(yamlPath string, pkgs []string) error {
+	content := ""
+	if data, err := os.ReadFile(yamlPath); err == nil {
+		content = string(data)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	lines := strings.Split(content, "\n")
+
+	idx := -1
+	entryLine := map[string]int{}
+	for i, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if idx < 0 {
+			if trimmed == "allowBuilds:" || strings.HasPrefix(trimmed, "allowBuilds: ") {
+				idx = i
+			}
+			continue
+		}
+		if trimmed == "" || strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") {
+			if name := yamlEntryName(trimmed); name != "" {
+				entryLine[name] = i
+			}
+			continue
+		}
+		break
+	}
+
+	var missing []string
+	var fix []int
+	for _, p := range pkgs {
+		i, ok := entryLine[p]
+		if !ok {
+			missing = append(missing, p)
+			continue
+		}
+		parts := strings.SplitN(strings.TrimSpace(lines[i]), ":", 2)
+		val := ""
+		if len(parts) >= 2 {
+			val = strings.TrimSpace(parts[1])
+		}
+		if val != "true" && val != "false" {
+			fix = append(fix, i)
+		}
+	}
+	if len(missing) == 0 && len(fix) == 0 {
+		return nil
+	}
+	sort.Strings(missing)
+
+	if idx < 0 {
+		content = strings.TrimRight(content, "\n") + "\n\nallowBuilds:\n"
+		for _, p := range missing {
+			content += "  " + p + ": true\n"
+		}
+	} else {
+		for _, i := range fix {
+			name := yamlEntryName(strings.TrimSpace(lines[i]))
+			lines[i] = "  " + name + ": true"
+		}
+		var out []string
+		out = append(out, lines[:idx+1]...)
+		for _, p := range missing {
+			out = append(out, "  "+p+": true")
+		}
+		out = append(out, lines[idx+1:]...)
+		content = strings.Join(out, "\n")
+	}
+	if err := os.MkdirAll(filepath.Dir(yamlPath), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(yamlPath, []byte(content), 0644)
+}
+
+// removeAllowBuildsEntries 删除指定包的 allowBuilds 条目
+func removeAllowBuildsEntries(yamlPath string, pkgs []string) error {
+	data, err := os.ReadFile(yamlPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	drop := map[string]bool{}
+	for _, p := range pkgs {
+		drop[p] = true
+	}
+	lines := strings.Split(string(data), "\n")
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if (strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t")) &&
+			trimmed != "" && !strings.HasPrefix(trimmed, "#") && !strings.HasPrefix(trimmed, "-") {
+			parts := strings.SplitN(trimmed, ":", 2)
+			name := strings.TrimSpace(parts[0])
+			if drop[name] && (len(parts) < 2 || strings.TrimSpace(parts[1]) != "false") {
+				continue
+			}
+		}
+		out = append(out, l)
+	}
+	return os.WriteFile(yamlPath, []byte(strings.Join(out, "\n")), 0644)
+}
+
+// ensureAllowBuildsFor 写入 allowBuilds 并记录归属映射
+func ensureAllowBuildsFor(profile, pluginKey string, pkgs []string) error {
+	if err := mergeAllowBuildsEntries(profileWorkspaceYamlPathFor(profile), pkgs); err != nil {
+		return err
+	}
+	sidecar := readAllowBuildsSidecar()
+	for _, p := range pkgs {
+		found := false
+		for _, k := range sidecar[p] {
+			if k == pluginKey {
+				found = true
+				break
+			}
+		}
+		if !found {
+			sidecar[p] = append(sidecar[p], pluginKey)
+		}
+	}
+	return writeAllowBuildsSidecar(sidecar)
+}
+
+// cleanupAllowBuildsFor 卸载后移除归属记录并清理孤儿条目
+func cleanupAllowBuildsFor(profile, pluginKey string) error {
+	sidecar := readAllowBuildsSidecar()
+	var orphan []string
+	for pkg, keys := range sidecar {
+		var keep []string
+		for _, k := range keys {
+			if k != pluginKey {
+				keep = append(keep, k)
+			}
+		}
+		if len(keep) == 0 {
+			delete(sidecar, pkg)
+			orphan = append(orphan, pkg)
+		} else {
+			sidecar[pkg] = keep
+		}
+	}
+	if len(orphan) > 0 {
+		if err := removeAllowBuildsEntries(profileWorkspaceYamlPathFor(profile), orphan); err != nil {
+			return fmt.Errorf("清理 allowBuilds 失败: %s", err)
+		}
+	}
+	return writeAllowBuildsSidecar(sidecar)
+}
+
 type PluginFailureInfo struct {
 	Target    string    `json:"target"`
 	EntryID   string    `json:"entryId,omitempty"`
@@ -277,25 +505,18 @@ type PluginFailureInfo struct {
 }
 
 var (
-	diagMu        sync.RWMutex
-	failedPlugins = make(map[string]PluginFailureInfo)
-
-	// 状态机：跟踪上一行是否为 "Failed to load plugins"
+	diagMu                  sync.RWMutex
+	failedPlugins           = make(map[string]PluginFailureInfo)
 	lastLineWasFailedToLoad bool
 )
 
 var (
-	// 匹配 failed to apply loader entry 8ac07933 (dsh-vision-router): ...
-	loaderEntryErrRe = regexp.MustCompile(`(?i)failed to apply loader entry\s*([0-9a-fA-F_-]+)?\s*(?:\(([^)]+)\))?:\s*(.+)`)
-	// 匹配 [ERROR] failed to load plugin dsh-xxx / Plugin 'xxx' failed to load
-	genericPluginErrRe = regexp.MustCompile(`(?i)(?:plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?\s+failed|failed to load plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?):\s*(.+)`)
-	// 匹配包名格式（用于多行 Failed to load plugins 下一行的包名提取）
-	pkgNamePatternRe = regexp.MustCompile(`^[@a-zA-Z0-9/._-]+$`)
-	// 匹配服务依赖死锁挂起: @deepseek-ai/dsh-host-apiproxy: pending (waiting for service: attachments)
+	loaderEntryErrRe    = regexp.MustCompile(`(?i)failed to apply loader entry\s*([0-9a-fA-F_-]+)?\s*(?:\(([^)]+)\))?:\s*(.+)`)
+	genericPluginErrRe  = regexp.MustCompile(`(?i)(?:plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?\s+failed|failed to load plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?):\s*(.+)`)
+	pkgNamePatternRe    = regexp.MustCompile(`^[@a-zA-Z0-9/._-]+$`)
 	servicePendingErrRe = regexp.MustCompile(`(?i)([@a-zA-Z0-9/._-]+):\s*pending\s*\(waiting for service:\s*([^)]+)\)`)
 )
 
-// RecordPluginFailureRecord 记录插件加载失败信息
 func RecordPluginFailureRecord(pkgName, entryID, reason string) {
 	pkgName = strings.TrimSpace(pkgName)
 	entryID = strings.TrimSpace(entryID)
@@ -322,14 +543,12 @@ func RecordPluginFailureRecord(pkgName, entryID, reason string) {
 	LogWarning("[插件故障捕获] 成功捕获插件崩溃: %s (Entry: %s) -> %s", pkgName, entryID, reason)
 }
 
-// ClearPluginFailure 清理特定插件的故障记录
 func ClearPluginFailure(pkgName string) {
 	diagMu.Lock()
 	defer diagMu.Unlock()
 	delete(failedPlugins, pkgName)
 }
 
-// ClearAllPluginFailures 清理全部故障记录（如每次主服务发起新一轮启动前）
 func ClearAllPluginFailures() {
 	diagMu.Lock()
 	defer diagMu.Unlock()
@@ -339,7 +558,6 @@ func ClearAllPluginFailures() {
 	}
 }
 
-// GetFailedPlugins 获取当前所有故障插件映射快照
 func GetFailedPlugins() map[string]PluginFailureInfo {
 	diagMu.RLock()
 	defer diagMu.RUnlock()
@@ -350,7 +568,6 @@ func GetFailedPlugins() map[string]PluginFailureInfo {
 	return res
 }
 
-// DisableAllBrokenPlugins 一键禁用所有当前记录的故障插件
 func DisableAllBrokenPlugins(profile string) ([]string, error) {
 	failed := GetFailedPlugins()
 	if len(failed) == 0 {
@@ -374,14 +591,13 @@ func DisableAllBrokenPlugins(profile string) ([]string, error) {
 	return disabledNames, nil
 }
 
-// ParseAndRecordStderrDiagnostics 从 stderr/stdout 输出行中解析并记录插件崩溃信息
+// ParseAndRecordStderrDiagnostics 解析 stderr/stdout 中的插件崩溃信息
 func ParseAndRecordStderrDiagnostics(text string) {
 	clean := strings.TrimSpace(text)
 	if clean == "" {
 		return
 	}
 
-	// 1. 匹配 loader entry 报错
 	if m := loaderEntryErrRe.FindStringSubmatch(clean); len(m) >= 4 {
 		entryID := strings.TrimSpace(m[1])
 		pkgName := strings.TrimSpace(m[2])
@@ -394,7 +610,6 @@ func ParseAndRecordStderrDiagnostics(text string) {
 		return
 	}
 
-	// 2. 匹配通用插件失败行
 	if m := genericPluginErrRe.FindStringSubmatch(clean); len(m) >= 4 {
 		pkgName := strings.TrimSpace(m[1])
 		if pkgName == "" {
@@ -406,7 +621,6 @@ func ParseAndRecordStderrDiagnostics(text string) {
 		return
 	}
 
-	// 3. 匹配服务死锁挂起行
 	if m := servicePendingErrRe.FindStringSubmatch(clean); len(m) >= 3 {
 		target := strings.TrimSpace(m[1])
 		svc := strings.TrimSpace(m[2])
@@ -415,7 +629,6 @@ func ParseAndRecordStderrDiagnostics(text string) {
 		return
 	}
 
-	// 4. 状态机：处理多行 "Failed to load plugins" 结构
 	if strings.EqualFold(clean, "Failed to load plugins") || strings.EqualFold(clean, "Failed to load plugin") {
 		lastLineWasFailedToLoad = true
 		return
