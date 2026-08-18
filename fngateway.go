@@ -102,8 +102,6 @@ func handleFnGateway(c *gin.Context) {
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			LogWarning("飞牛网关代理转发错误: %s", err)
-
 			// API / 数据请求返回结构化 JSON
 			if !strings.Contains(r.Header.Get("Accept"), "text/html") {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -101,9 +101,6 @@
                 </n-layout-footer>
               </n-layout>
             </n-layout>
-
-            <!-- 仅在开发环境挂载的仿真调试控制悬浮窗（生产构建通过 DCE 彻底排除） -->
-            <component :is="MockDevControls" v-if="isDev && MockDevControls" />
           </n-message-provider>
         </n-notification-provider>
       </n-dialog-provider>
@@ -112,13 +109,7 @@
 </template>
 
 <script setup lang="ts">
-import { h, ref, computed, watch, onMounted, defineAsyncComponent, type Component } from 'vue'
-
-// 仅在开发模式动态加载仿真控制组件，生产构建由 Vite/Rollup 死代码消除 (DCE) 彻底剔除
-const isDev = Boolean(import.meta.env.DEV)
-const MockDevControls = isDev
-  ? defineAsyncComponent(() => import('./components/MockDevControls.vue'))
-  : null
+import { h, ref, computed, watch, onMounted, type Component } from 'vue'
 import {
   NConfigProvider,
   NGlobalStyle,
