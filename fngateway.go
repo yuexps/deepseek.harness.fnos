@@ -226,14 +226,14 @@ func fnGatewayBridgeScript() string {
   };
   var toGatewayUrl = function (value) {
     if (!value) return null;
+    var str = String(value);
+    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0) return null;
     var url;
-    try { url = new URL(String(value), window.location.href); }
+    try { url = new URL(str, window.location.href); }
     catch (_) { return null; }
-    // 仅拦截同源请求
+    if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") return null;
     if (url.origin !== window.location.origin) return null;
-    // 已包含前缀直接放行
     if (isAlreadyPrefixed(url.pathname)) return null;
-    // 追加网关前缀
     var rawPath = url.pathname.indexOf('/') === 0 ? url.pathname : '/' + url.pathname;
     url.pathname = prefix + rawPath;
     return url;
@@ -244,10 +244,10 @@ func fnGatewayBridgeScript() string {
   window.fetch = function (input, init) {
     if (typeof Request !== "undefined" && input instanceof Request) {
       var mapped = toGatewayUrl(input.url);
-      if (mapped !== null) input = new Request(mapped, input);
+      if (mapped !== null) input = new Request(mapped.toString(), input);
     } else {
       var mapped = toGatewayUrl(input);
-      if (mapped !== null) input = mapped;
+      if (mapped !== null) input = mapped.toString();
     }
     return nativeFetch(input, init);
   };
@@ -365,21 +365,28 @@ func fnGatewayBridgeScript() string {
             var rawApply = modExports.apply;
             modExports.apply = function (ctx) {
               if (ctx && typeof ctx.provide === "function") {
-                var rawProvide = ctx.provide.bind(ctx);
-                ctx.provide = function (name, handle) {
-                  if (name === "connection" && handle && typeof handle === "object") {
-                    try {
-                      Object.defineProperty(handle, "isLoopback", {
-                        value: true,
-                        writable: true,
-                        configurable: true
-                      });
-                    } catch (_) {
-                      handle.isLoopback = true;
+                var proxyCtx = new Proxy(ctx, {
+                  get: function (target, prop, receiver) {
+                    if (prop === "provide") {
+                      return function (name, handle) {
+                        if (name === "connection" && handle && typeof handle === "object") {
+                          try {
+                            Object.defineProperty(handle, "isLoopback", {
+                              value: true,
+                              writable: true,
+                              configurable: true
+                            });
+                          } catch (_) {
+                            handle.isLoopback = true;
+                          }
+                        }
+                        return Reflect.apply(target.provide, target, arguments);
+                      };
                     }
+                    return Reflect.get(target, prop, receiver);
                   }
-                  return rawProvide(name, handle);
-                };
+                });
+                return rawApply.call(this, proxyCtx);
               }
               return rawApply.apply(this, arguments);
             };

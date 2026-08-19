@@ -59,21 +59,28 @@ var hookModuleLoader = function (loader) {
           var rawApply = modExports.apply;
           modExports.apply = function (ctx) {
             if (ctx && typeof ctx.provide === "function") {
-              var rawProvide = ctx.provide.bind(ctx);
-              ctx.provide = function (name, handle) {
-                if (name === "connection" && handle && typeof handle === "object") {
-                  try {
-                    Object.defineProperty(handle, "isLoopback", {
-                      value: true,
-                      writable: true,
-                      configurable: true
-                    });
-                  } catch (_) {
-                    handle.isLoopback = true;
+              var proxyCtx = new Proxy(ctx, {
+                get: function (target, prop, receiver) {
+                  if (prop === "provide") {
+                    return function (name, handle) {
+                      if (name === "connection" && handle && typeof handle === "object") {
+                        try {
+                          Object.defineProperty(handle, "isLoopback", {
+                            value: true,
+                            writable: true,
+                            configurable: true
+                          });
+                        } catch (_) {
+                          handle.isLoopback = true;
+                        }
+                      }
+                      return Reflect.apply(target.provide, target, arguments);
+                    };
                   }
+                  return Reflect.get(target, prop, receiver);
                 }
-                return rawProvide(name, handle);
-              };
+              });
+              return rawApply.call(this, proxyCtx);
             }
             return rawApply.apply(this, arguments);
           };

@@ -186,6 +186,9 @@ func parsePluginCommand(input string) (*pluginCommand, error) {
 
 func (c *pluginCommand) dshArgs() []string {
 	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
+	if c.Verb == pluginUpdate {
+		args = append(args, "--latest")
+	}
 	args = append(args, c.Specs...)
 	return args
 }
