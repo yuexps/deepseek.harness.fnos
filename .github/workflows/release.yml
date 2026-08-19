@@ -31,20 +31,42 @@ jobs:
         with:
           version: 11
 
-      - name: Fetch and Prebuild Upstream Harness (amd64)
+      - name: Install System Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools build-essential
+          if ! (sudo apt-get update -o Acquire::http::Timeout="5" -o Acquire::Retries="1" && sudo apt-get install -y --no-install-recommends musl-tools); then
+            echo "Azure mirror timed out or failed, switching to Ubuntu official main archive..."
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+            sudo apt-get update -o Acquire::http::Timeout="15" -o Acquire::Retries="3"
+            sudo apt-get install -y --no-install-recommends musl-tools
+          fi
+
+      - name: Clone Upstream Harness
+        run: |
           mkdir -p /tmp/upstream
           git clone --depth=1 https://github.com/deepseek-ai/deepseek-harness.git /tmp/upstream/deepseek-harness
           cd /tmp/upstream/deepseek-harness
-          
           UPSTREAM_VER=$(node -p "require('./package.json').version")
           echo "$UPSTREAM_VER" > /tmp/version.txt
           echo "Upstream deepseek-harness version: $UPSTREAM_VER"
-          
           # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
           git sparse-checkout set packages apps vendor native patches scripts website
-          
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-harness-${{ hashFiles('/tmp/upstream/deepseek-harness/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-harness-
+
+      - name: Prebuild Upstream Harness (amd64)
+        run: |
           # 打包纯源码包（仅含编译所需全量源码与构建配置，不含 node_modules 与非运行文档）
           cd /tmp/upstream
           tar --numeric-owner -czf /tmp/deepseek-harness-source.tar.gz deepseek-harness
@@ -174,17 +196,41 @@ jobs:
         with:
           version: 11
 
-      - name: Fetch and Prebuild Upstream Harness (arm64)
+      - name: Install System Dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools build-essential
+          if ! (sudo apt-get update -o Acquire::http::Timeout="5" -o Acquire::Retries="1" && sudo apt-get install -y --no-install-recommends musl-tools); then
+            echo "Azure mirror timed out or failed, switching to Ubuntu official main archive..."
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
+            sudo apt-get update -o Acquire::http::Timeout="15" -o Acquire::Retries="3"
+            sudo apt-get install -y --no-install-recommends musl-tools
+          fi
+
+      - name: Clone Upstream Harness
+        run: |
           mkdir -p /tmp/upstream
           git clone --depth=1 https://github.com/deepseek-ai/deepseek-harness.git /tmp/upstream/deepseek-harness
           cd /tmp/upstream/deepseek-harness
-          
           # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
           git sparse-checkout set packages apps vendor native patches scripts website
-          
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-harness-${{ hashFiles('/tmp/upstream/deepseek-harness/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-harness-
+
+      - name: Prebuild Upstream Harness (arm64)
+        run: |
           # 执行完整构建并编译 Landlock 原生沙箱组件
+          cd /tmp/upstream/deepseek-harness
           pnpm install --no-frozen-lockfile
           pnpm run build
           cd native/landlock-run
@@ -331,67 +377,98 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build x86 Prebuilt fpk
+      - name: Compile Go Binaries
         run: |
-          mkdir -p fnpack_x86_prebuilt/app/bin
-          cp -r fnpack/* fnpack_x86_prebuilt/
-          echo "prebuilt" > fnpack_x86_prebuilt/app/.pkg_type
-          cp /tmp/amd64-dist/version.txt fnpack_x86_prebuilt/app/.version
-          cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86_prebuilt/app/deepseek-harness.tar.gz
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o fnpack_x86_prebuilt/app/bin/${{ env.BIN_NAME }} .
-          cd fnpack_x86_prebuilt
-          chmod +x ${{ env.FNPACK_BIN }}
-          ./${{ env.FNPACK_BIN }} build
-          cd ..
-          mv fnpack_x86_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86-prebuilt.fpk
-          rm -rf fnpack_x86_prebuilt
+          mkdir -p /tmp/gobins
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /tmp/gobins/${{ env.BIN_NAME }}-amd64 .
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o /tmp/gobins/${{ env.BIN_NAME }}-arm64 .
 
-      - name: Build arm Prebuilt fpk
+      - name: Build All FPK Packages (Parallel)
         run: |
-          mkdir -p fnpack_arm_prebuilt/app/bin
-          cp -r fnpack/* fnpack_arm_prebuilt/
-          echo "prebuilt" > fnpack_arm_prebuilt/app/.pkg_type
-          cp /tmp/amd64-dist/version.txt fnpack_arm_prebuilt/app/.version
-          cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm_prebuilt/app/deepseek-harness.tar.gz
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o fnpack_arm_prebuilt/app/bin/${{ env.BIN_NAME }} .
-          sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_prebuilt/manifest
-          cd fnpack_arm_prebuilt
-          chmod +x ${{ env.FNPACK_BIN }}
-          ./${{ env.FNPACK_BIN }} build
-          cd ..
-          mv fnpack_arm_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm-prebuilt.fpk
-          rm -rf fnpack_arm_prebuilt
+          # 1. x86 预构建版
+          (
+            mkdir -p fnpack_x86_prebuilt/app/bin
+            cp -r fnpack/* fnpack_x86_prebuilt/
+            echo "prebuilt" > fnpack_x86_prebuilt/app/.pkg_type
+            cp /tmp/amd64-dist/version.txt fnpack_x86_prebuilt/app/.version
+            cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86_prebuilt/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86_prebuilt/app/bin/${{ env.BIN_NAME }}
+            cd fnpack_x86_prebuilt
+            chmod +x ${{ env.FNPACK_BIN }}
+            ./${{ env.FNPACK_BIN }} build
+            cd ..
+            mv fnpack_x86_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86-prebuilt.fpk
+            rm -rf fnpack_x86_prebuilt
+            echo "x86-prebuilt FPK built successfully."
+          ) &
+          PID_X86_PREBUILT=$!
 
-      - name: Build x86 Source fpk
-        run: |
-          mkdir -p fnpack_x86_source/app/bin
-          cp -r fnpack/* fnpack_x86_source/
-          echo "source" > fnpack_x86_source/app/.pkg_type
-          cp /tmp/amd64-dist/version.txt fnpack_x86_source/app/.version
-          cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_x86_source/app/deepseek-harness.tar.gz
-          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o fnpack_x86_source/app/bin/${{ env.BIN_NAME }} .
-          cd fnpack_x86_source
-          chmod +x ${{ env.FNPACK_BIN }}
-          ./${{ env.FNPACK_BIN }} build
-          cd ..
-          mv fnpack_x86_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86.fpk
-          rm -rf fnpack_x86_source
+          # 2. arm 预构建版
+          (
+            mkdir -p fnpack_arm_prebuilt/app/bin
+            cp -r fnpack/* fnpack_arm_prebuilt/
+            echo "prebuilt" > fnpack_arm_prebuilt/app/.pkg_type
+            cp /tmp/amd64-dist/version.txt fnpack_arm_prebuilt/app/.version
+            cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm_prebuilt/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm_prebuilt/app/bin/${{ env.BIN_NAME }}
+            sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_prebuilt/manifest
+            cd fnpack_arm_prebuilt
+            chmod +x ${{ env.FNPACK_BIN }}
+            ./${{ env.FNPACK_BIN }} build
+            cd ..
+            mv fnpack_arm_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm-prebuilt.fpk
+            rm -rf fnpack_arm_prebuilt
+            echo "ARM-prebuilt FPK built successfully."
+          ) &
+          PID_ARM_PREBUILT=$!
 
-      - name: Build arm Source fpk
-        run: |
-          mkdir -p fnpack_arm_source/app/bin
-          cp -r fnpack/* fnpack_arm_source/
-          echo "source" > fnpack_arm_source/app/.pkg_type
-          cp /tmp/amd64-dist/version.txt fnpack_arm_source/app/.version
-          cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_arm_source/app/deepseek-harness.tar.gz
-          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o fnpack_arm_source/app/bin/${{ env.BIN_NAME }} .
-          sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_source/manifest
-          cd fnpack_arm_source
-          chmod +x ${{ env.FNPACK_BIN }}
-          ./${{ env.FNPACK_BIN }} build
-          cd ..
-          mv fnpack_arm_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm.fpk
-          rm -rf fnpack_arm_source
+          # 3. x86 源码版
+          (
+            mkdir -p fnpack_x86_source/app/bin
+            cp -r fnpack/* fnpack_x86_source/
+            echo "source" > fnpack_x86_source/app/.pkg_type
+            cp /tmp/amd64-dist/version.txt fnpack_x86_source/app/.version
+            cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_x86_source/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86_source/app/bin/${{ env.BIN_NAME }}
+            cd fnpack_x86_source
+            chmod +x ${{ env.FNPACK_BIN }}
+            ./${{ env.FNPACK_BIN }} build
+            cd ..
+            mv fnpack_x86_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86.fpk
+            rm -rf fnpack_x86_source
+            echo "x86-source FPK built successfully."
+          ) &
+          PID_X86_SOURCE=$!
+
+          # 4. arm 源码版
+          (
+            mkdir -p fnpack_arm_source/app/bin
+            cp -r fnpack/* fnpack_arm_source/
+            echo "source" > fnpack_arm_source/app/.pkg_type
+            cp /tmp/amd64-dist/version.txt fnpack_arm_source/app/.version
+            cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_arm_source/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm_source/app/bin/${{ env.BIN_NAME }}
+            sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_source/manifest
+            cd fnpack_arm_source
+            chmod +x ${{ env.FNPACK_BIN }}
+            ./${{ env.FNPACK_BIN }} build
+            cd ..
+            mv fnpack_arm_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm.fpk
+            rm -rf fnpack_arm_source
+            echo "ARM-source FPK built successfully."
+          ) &
+          PID_ARM_SOURCE=$!
+
+          # 等待所有后台任务并捕获失败退出码
+          FAIL=0
+          for pid in $PID_X86_PREBUILT $PID_ARM_PREBUILT $PID_X86_SOURCE $PID_ARM_SOURCE; do
+            wait $pid || FAIL=1
+          done
+
+          if [ $FAIL -ne 0 ]; then
+            echo "Error: One or more FPK build tasks failed."
+            exit 1
+          fi
 
       - name: Extract Manifest Version
         id: manifest
