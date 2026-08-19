@@ -33,12 +33,31 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          if ! (sudo apt-get update -o Acquire::http::Timeout="5" -o Acquire::Retries="1" && sudo apt-get install -y --no-install-recommends musl-tools); then
-            echo "Azure mirror timed out or failed, switching to Ubuntu official main archive..."
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
-            sudo apt-get update -o Acquire::http::Timeout="15" -o Acquire::Retries="3"
-            sudo apt-get install -y --no-install-recommends musl-tools
+          # 清理全部冗余第三方源与慢速镜像配置
+          sudo rm -rf /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt
+          ARCH=$(dpkg --print-architecture)
+          if [ "$ARCH" = "arm64" ]; then
+            MIRROR_URL="http://ports.ubuntu.com/ubuntu-ports/"
+            SEC_URL="http://ports.ubuntu.com/ubuntu-ports/"
+          else
+            MIRROR_URL="http://archive.ubuntu.com/ubuntu/"
+            SEC_URL="http://security.ubuntu.com/ubuntu/"
           fi
+          sudo tee /etc/apt/sources.list.d/ubuntu.sources <<EOF
+          Types: deb
+          URIs: $MIRROR_URL
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: $SEC_URL
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="2"
+          sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Clone Upstream Harness
         run: |
@@ -198,12 +217,31 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          if ! (sudo apt-get update -o Acquire::http::Timeout="5" -o Acquire::Retries="1" && sudo apt-get install -y --no-install-recommends musl-tools); then
-            echo "Azure mirror timed out or failed, switching to Ubuntu official main archive..."
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu/|http://archive.ubuntu.com/ubuntu/|g' /etc/apt/sources.list.d/*.sources /etc/apt/sources.list /etc/apt/apt-mirrors.txt 2>/dev/null || true
-            sudo apt-get update -o Acquire::http::Timeout="15" -o Acquire::Retries="3"
-            sudo apt-get install -y --no-install-recommends musl-tools
+          # 清理全部冗余第三方源与慢速镜像配置
+          sudo rm -rf /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt
+          ARCH=$(dpkg --print-architecture)
+          if [ "$ARCH" = "arm64" ]; then
+            MIRROR_URL="http://ports.ubuntu.com/ubuntu-ports/"
+            SEC_URL="http://ports.ubuntu.com/ubuntu-ports/"
+          else
+            MIRROR_URL="http://archive.ubuntu.com/ubuntu/"
+            SEC_URL="http://security.ubuntu.com/ubuntu/"
           fi
+          sudo tee /etc/apt/sources.list.d/ubuntu.sources <<EOF
+          Types: deb
+          URIs: $MIRROR_URL
+          Suites: noble noble-updates
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+          Types: deb
+          URIs: $SEC_URL
+          Suites: noble-security
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update -o Acquire::http::Timeout="10" -o Acquire::Retries="2"
+          sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Clone Upstream Harness
         run: |
