@@ -99,6 +99,20 @@ func handleFnGateway(c *gin.Context) {
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
 			}
 
+			// 拦截 JS 资源改写回环状态判定
+			if (strings.Contains(contentType, "javascript") || strings.Contains(contentType, "text/javascript")) && resp.Body != nil {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					return err
+				}
+
+				modified := rewriteJsBundle(bodyBytes)
+				resp.Body = io.NopCloser(bytes.NewReader(modified))
+				resp.ContentLength = int64(len(modified))
+				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+			}
+
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -180,7 +194,7 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 
 // fnGatewayBridgeScript 生成前端运行时拦截补丁脚本
 func fnGatewayBridgeScript() string {
-	return `<script>
+	return `<style>[data-slot="settings.action"] { display: none !important; }</style><script>
 (function (prefix) {
   // 仅在当前页面位于网关前缀下时激活
   if (typeof window === "undefined" || !window.location || window.location.pathname.indexOf(prefix) !== 0) return;
@@ -336,6 +350,62 @@ func fnGatewayBridgeScript() string {
         return Reflect.construct(target, args, newTarget);
       }
     });
+  }
+
+  // DSH 客户端回环状态与配置持久化兼容补丁
+  var hookModuleLoader = function (loader) {
+    if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
+    var rawLoad = loader.load.bind(loader);
+    loader.load = function (handoff) {
+      if (handoff && handoff.id === "@deepseek-ai/dsh-client-connection" && typeof handoff.factory === "function") {
+        var rawFactory = handoff.factory;
+        handoff.factory = function () {
+          var modExports = rawFactory.apply(this, arguments);
+          if (modExports && typeof modExports.apply === "function") {
+            var rawApply = modExports.apply;
+            modExports.apply = function (ctx) {
+              if (ctx && typeof ctx.provide === "function") {
+                var rawProvide = ctx.provide.bind(ctx);
+                ctx.provide = function (name, handle) {
+                  if (name === "connection" && handle && typeof handle === "object") {
+                    try {
+                      Object.defineProperty(handle, "isLoopback", {
+                        value: true,
+                        writable: true,
+                        configurable: true
+                      });
+                    } catch (_) {
+                      handle.isLoopback = true;
+                    }
+                  }
+                  return rawProvide(name, handle);
+                };
+              }
+              return rawApply.apply(this, arguments);
+            };
+          }
+          return modExports;
+        };
+      }
+      return rawLoad(handoff);
+    };
+    loader.__hooked = true;
+    return loader;
+  };
+  if (window.__ModuleLoader__) {
+    hookModuleLoader(window.__ModuleLoader__);
+  } else {
+    var storedLoader = undefined;
+    try {
+      Object.defineProperty(window, "__ModuleLoader__", {
+        configurable: true,
+        enumerable: true,
+        get: function () { return storedLoader; },
+        set: function (val) {
+          storedLoader = hookModuleLoader(val);
+        }
+      });
+    } catch (_) {}
   }
 })("` + fnGatewayPrefix + `");
 </script>`

@@ -489,6 +489,20 @@ func startReverseProxyLocked() error {
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
 			}
 
+			// 拦截 JS 资源改写回环状态判定
+			if (strings.Contains(contentType, "javascript") || strings.Contains(contentType, "text/javascript")) && resp.Body != nil {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					return err
+				}
+
+				modified := rewriteJsBundle(bodyBytes)
+				resp.Body = io.NopCloser(bytes.NewReader(modified))
+				resp.ContentLength = int64(len(modified))
+				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+			}
+
 			return nil
 		},
 		ErrorHandler: errHandler,
@@ -599,7 +613,88 @@ func restartReverseProxy() {
 	}
 }
 
-const httpPolyfillScript = `<script>(function(){var c=window.crypto;if(c&&typeof c.randomUUID!=="function"&&typeof c.getRandomValues==="function"){var getRand=c.getRandomValues.bind(c);var uuid=function(){var b=new Uint8Array(16);getRand(b);b[6]=(b[6]&15)|64;b[8]=(b[8]&63)|128;var h=Array.from(b,function(x){return("0"+x.toString(16)).slice(-2);}).join("");return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);};var install=function(target){try{Object.defineProperty(target,"randomUUID",{configurable:true,writable:true,value:uuid});return typeof target.randomUUID==="function";}catch(_){return false;}};if(!install(c)&&Object.getPrototypeOf(c))install(Object.getPrototypeOf(c));}})();</script>`
+const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none !important; }</style><script>(function(){
+  var c=window.crypto;
+  if(c&&typeof c.randomUUID!=="function"&&typeof c.getRandomValues==="function"){
+    var getRand=c.getRandomValues.bind(c);
+    var uuid=function(){
+      var b=new Uint8Array(16);
+      getRand(b);
+      b[6]=(b[6]&15)|64;
+      b[8]=(b[8]&63)|128;
+      var h=Array.from(b,function(x){return("0"+x.toString(16)).slice(-2);}).join("");
+      return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);
+    };
+    var install=function(target){
+      try{Object.defineProperty(target,"randomUUID",{configurable:true,writable:true,value:uuid});return typeof target.randomUUID==="function";}catch(_){return false;}
+    };
+    if(!install(c)&&Object.getPrototypeOf(c))install(Object.getPrototypeOf(c));
+  }
+
+  var hookModuleLoader = function (loader) {
+    if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
+    var rawLoad = loader.load.bind(loader);
+    loader.load = function (handoff) {
+      if (handoff && handoff.id === "@deepseek-ai/dsh-client-connection" && typeof handoff.factory === "function") {
+        var rawFactory = handoff.factory;
+        handoff.factory = function () {
+          var modExports = rawFactory.apply(this, arguments);
+          if (modExports && typeof modExports.apply === "function") {
+            var rawApply = modExports.apply;
+            modExports.apply = function (ctx) {
+              if (ctx && typeof ctx.provide === "function") {
+                var rawProvide = ctx.provide.bind(ctx);
+                ctx.provide = function (name, handle) {
+                  if (name === "connection" && handle && typeof handle === "object") {
+                    try {
+                      Object.defineProperty(handle, "isLoopback", {
+                        value: true,
+                        writable: true,
+                        configurable: true
+                      });
+                    } catch (_) {
+                      handle.isLoopback = true;
+                    }
+                  }
+                  return rawProvide(name, handle);
+                };
+              }
+              return rawApply.apply(this, arguments);
+            };
+          }
+          return modExports;
+        };
+      }
+      return rawLoad(handoff);
+    };
+    loader.__hooked = true;
+    return loader;
+  };
+  if (window.__ModuleLoader__) {
+    hookModuleLoader(window.__ModuleLoader__);
+  } else {
+    var storedLoader = undefined;
+    try {
+      Object.defineProperty(window, "__ModuleLoader__", {
+        configurable: true,
+        enumerable: true,
+        get: function () { return storedLoader; },
+        set: function (val) {
+          storedLoader = hookModuleLoader(val);
+        }
+      });
+    } catch (_) {}
+  }
+})();</script>`
+
+// rewriteJsBundle 改写客户端 JS 中的回环判断，使远程/反代访问时也能正常读取并持久化插件设置
+func rewriteJsBundle(body []byte) []byte {
+	res := bytes.ReplaceAll(body, []byte(`connection.isLoopback ? "host" : "memory"`), []byte(`"host"`))
+	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback ? 'host' : 'memory'`), []byte(`'host'`))
+	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback?"host":"memory"`), []byte(`"host"`))
+	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback?'host':'memory'`), []byte(`'host'`))
+	return res
+}
 
 // injectHtmlPolyfill 将兼容补丁注入 HTML 的 head 头部
 func injectHtmlPolyfill(body []byte) []byte {
@@ -623,3 +718,4 @@ func injectHtmlPolyfill(body []byte) []byte {
 	res.Write(body)
 	return res.Bytes()
 }
+
