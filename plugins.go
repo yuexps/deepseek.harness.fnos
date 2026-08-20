@@ -521,6 +521,9 @@ func setPluginRunning() error {
 	if _, err := os.Stat(filepath.Join(srcDir, "node_modules")); err != nil {
 		return fmt.Errorf("运行环境未就绪或依赖文件缺失")
 	}
+	if err := installPnpm(); err != nil {
+		return fmt.Errorf("初始化 pnpm 运行环境失败: %w", err)
+	}
 	pluginOp = pluginOpState{Running: true}
 	notifyPlugin()
 	return nil

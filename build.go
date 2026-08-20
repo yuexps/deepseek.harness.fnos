@@ -225,6 +225,10 @@ func repairEnvironment() {
 		return
 	}
 
+	if err := installPnpm(); err != nil {
+		LogWarning("初始化 pnpm 运行环境失败: %s", err)
+	}
+
 	fixPermissions(srcDir)
 	refreshCommit()
 	SetBuildTime(time.Now())

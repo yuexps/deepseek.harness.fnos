@@ -148,6 +148,10 @@ func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 			return
 		}
 
+		if err := installPnpm(); err != nil {
+			LogWarning("初始化 pnpm 运行环境失败: %s", err)
+		}
+
 		fixPermissions(srcDir)
 		refreshCommit()
 		SetBuildTime(time.Now())
@@ -218,6 +222,9 @@ func InitHarness(pkgVar, appdest string) {
 
 	// 3. 常规启动：直接刷新版本并按上次状态自启
 	refreshCommit()
+	go func() {
+		_ = installPnpm()
+	}()
 	if GetLastRunState() == StatusRunning {
 		LogInfo("检测到上次运行状态为 running，正在自动拉起服务")
 		go func() {
