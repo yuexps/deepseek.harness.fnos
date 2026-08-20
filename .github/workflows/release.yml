@@ -475,6 +475,62 @@ jobs:
           path: ./${{ env.BIN_NAME }}-arm.fpk
           if-no-files-found: error
 
+      - name: Generate Changelog and Release Body
+        run: |
+          CURR_TAG="v${{ steps.manifest.outputs.version }}"
+          
+          # 确保拉取完整 tags
+          git fetch --tags --force 2>/dev/null || true
+          
+          # 查找上一个语义化版本 tag（排除当前 tag）
+          PREV_TAG=$(git tag -l "v*" --sort=-v:refname | grep -E '^v[0-9]' | grep -v "^${CURR_TAG}$" | head -n 1)
+          
+          echo "Current Tag: $CURR_TAG"
+          echo "Previous Tag: $PREV_TAG"
+          
+          # 写入 Release 基础信息
+          {
+            echo "### 安装包说明"
+            echo ""
+            echo "| 文件名 | 架构 | 说明 |"
+            echo "| :--- | :---: | :--- |"
+            echo "| \`deepseek.harness-x86.fpk\` | x86_64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |"
+            echo "| \`deepseek.harness-arm.fpk\` | ARM64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |"
+            echo ""
+            echo "---"
+            echo "- 应用版本：\`${CURR_TAG}\`"
+            echo "- 上游源码版本：\`${{ steps.manifest.outputs.upstream_ver }}\`"
+            echo ""
+            echo "### 更新日志"
+            echo ""
+          } > release_body.md
+
+          HAS_COMMITS=0
+          if [ -n "$PREV_TAG" ]; then
+            if [ -n "$(git log "${PREV_TAG}..HEAD" --no-merges --oneline)" ]; then
+              git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"* %s (%h)" >> release_body.md
+              HAS_COMMITS=1
+            fi
+          else
+            if [ -n "$(git log HEAD --no-merges --oneline)" ]; then
+              git log HEAD --no-merges --pretty=format:"* %s (%h)" -n 20 >> release_body.md
+              HAS_COMMITS=1
+            fi
+          fi
+          
+          if [ $HAS_COMMITS -eq 0 ]; then
+            echo "* 维护与细节优化" >> release_body.md
+          fi
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "" >> release_body.md
+            echo "" >> release_body.md
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${CURR_TAG}" >> release_body.md
+          fi
+
+          echo "Generated release body:"
+          cat release_body.md
+
       - name: Delete Existing Release and Tag (if exists)
         if: ${{ github.event.inputs.publish_release == 'true' || github.event.inputs.publish_release == true }}
         env:
@@ -495,18 +551,7 @@ jobs:
         with:
           tag_name: "v${{ steps.manifest.outputs.version }}"
           name: "Release v${{ steps.manifest.outputs.version }}"
-          body: |
-            ### 安装包说明
-
-            | 文件名 | 架构 | 说明 |
-            | :--- | :---: | :--- |
-            | `deepseek.harness-x86.fpk` | x86_64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |
-            | `deepseek.harness-arm.fpk` | ARM64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |
-
-            ---
-            - 应用版本：`v${{ steps.manifest.outputs.version }}`
-            - 上游源码版本：`${{ steps.manifest.outputs.upstream_ver }}`
-          generate_release_notes: true
+          body_path: release_body.md
           draft: false
           prerelease: false
           make_latest: true
