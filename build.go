@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -174,60 +172,18 @@ func safeRemoveAll(path string) error {
 	return os.RemoveAll(path)
 }
 
-// fixPermissions 权限自愈：递归将数据目录（dsh-data、home）归属赋予 deepseek.harness 用户并确保可读写，二进制与沙箱组件具备可执行权限
+// fixPermissions 启动前权限轻量检查：确保运行关键凭据与沙箱组件具备基础权限
 func fixPermissions(targetDir string) {
 	if targetDir != "" {
 		_ = os.Chmod(targetDir, 0755)
 	}
 
-	var targetUID, targetGID int = -1, -1
-	if u, err := user.Lookup("deepseek.harness"); err == nil {
-		if uid, err := strconv.Atoi(u.Uid); err == nil {
-			if gid, err := strconv.Atoi(u.Gid); err == nil {
-				targetUID, targetGID = uid, gid
-			}
-		}
-	}
-
-	// 递归修复指定目录及其所有子项所有权与权限（赋予 deepseek.harness 属主读写权限）
-	fixDirRecursive := func(dirPath string) {
-		if _, err := os.Stat(dirPath); err == nil {
-			if targetUID >= 0 && targetGID >= 0 {
-				_ = os.Chown(dirPath, targetUID, targetGID)
-			}
-			_ = os.Chmod(dirPath, 0755)
-			_ = filepath.Walk(dirPath, func(p string, info os.FileInfo, err error) error {
-				if err != nil {
-					return nil
-				}
-				if targetUID >= 0 && targetGID >= 0 {
-					_ = os.Chown(p, targetUID, targetGID)
-				}
-				if info.IsDir() {
-					_ = os.Chmod(p, 0755)
-				} else {
-					baseName := filepath.Base(p)
-					if baseName == ".credentials.yaml" || baseName == ".credentials.yml" || strings.HasPrefix(baseName, ".credentials") {
-						_ = os.Chmod(p, 0600)
-					} else if targetUID >= 0 {
-						_ = os.Chmod(p, 0644)
-					} else {
-						_ = os.Chmod(p, 0666)
-					}
-				}
-				return nil
-			})
-		}
-	}
-
-	// 深度修复用户核心数据目录，确立 deepseek.harness 属主
-	fixDirRecursive(filepath.Join(pkgVarDir, "dsh-data"))
-	fixDirRecursive(filepath.Join(pkgVarDir, "home"))
-
 	// 确保敏感凭据文件仅属主可读写 (mode 600)
-	credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
-	if _, err := os.Stat(credFile); err == nil {
-		_ = os.Chmod(credFile, 0600)
+	if pkgVarDir != "" {
+		credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
+		if _, err := os.Stat(credFile); err == nil {
+			_ = os.Chmod(credFile, 0600)
+		}
 	}
 
 	// 针对 landlock-run 等原生沙箱组件赋予可执行权限

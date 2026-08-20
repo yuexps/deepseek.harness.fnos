@@ -2,4 +2,48 @@
 
 ### This script is called after the user installs the application.
 
+# 确定数据目录路径
+LIB_TYPE="${wizard_data_library_type:-data}"
+if [ "${LIB_TYPE}" = "data" ]; then
+    DATA_LIBRARY_PATH="${TRIM_PKGVAR}"
+else
+    DATA_LIBRARY_PATH="${TRIM_DATA_SHARE_PATHS%%:*}"
+fi
+
+TARGET_USER="${wizard_dsh_run_user:-root}"
+if [ "${TARGET_USER}" = "package" ]; then
+    TARGET_USER="deepseek.harness"
+fi
+
+if [ -n "${DATA_LIBRARY_PATH}" ] && [ -d "${DATA_LIBRARY_PATH}" ]; then
+    # 预创建全部功能与缓存子目录
+    mkdir -p "${DATA_LIBRARY_PATH}/src" \
+             "${DATA_LIBRARY_PATH}/dsh-data" \
+             "${DATA_LIBRARY_PATH}/home" \
+             "${DATA_LIBRARY_PATH}/pnpm-env" \
+             "${DATA_LIBRARY_PATH}/pnpm-home" \
+             "${DATA_LIBRARY_PATH}/npm-cache" \
+             "${DATA_LIBRARY_PATH}/plugins"
+
+    # 1. 属主切换：仅递归切换功能子目录
+    if [ "${TARGET_USER}" != "root" ] && id "${TARGET_USER}" >/dev/null 2>&1; then
+        chown -R "${TARGET_USER}" "${DATA_LIBRARY_PATH}/src" \
+                                 "${DATA_LIBRARY_PATH}/dsh-data" \
+                                 "${DATA_LIBRARY_PATH}/home" \
+                                 "${DATA_LIBRARY_PATH}/pnpm-env" \
+                                 "${DATA_LIBRARY_PATH}/pnpm-home" \
+                                 "${DATA_LIBRARY_PATH}/npm-cache" \
+                                 "${DATA_LIBRARY_PATH}/plugins" 2>/dev/null || true
+    fi
+
+    # 2. 基础读写执行权限初始化
+    chmod -R u+rwX,g+rX,o+rX "${DATA_LIBRARY_PATH}/src" \
+                             "${DATA_LIBRARY_PATH}/dsh-data" \
+                             "${DATA_LIBRARY_PATH}/home" \
+                             "${DATA_LIBRARY_PATH}/pnpm-env" \
+                             "${DATA_LIBRARY_PATH}/pnpm-home" \
+                             "${DATA_LIBRARY_PATH}/npm-cache" \
+                             "${DATA_LIBRARY_PATH}/plugins" 2>/dev/null || true
+fi
+
 exit 0
