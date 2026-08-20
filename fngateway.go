@@ -272,12 +272,71 @@ func fnGatewayBridgeScript() string {
       var src = node.getAttribute("src") || node.src;
       var mapped = toGatewayUrl(src);
       if (mapped !== null) node.setAttribute("src", mapped.toString());
-    } else if (tag === "LINK") {
+    } else if (tag === "LINK" || tag === "A") {
       var href = node.getAttribute("href") || node.href;
       var mapped = toGatewayUrl(href);
-      if (mapped !== null) node.setAttribute("href", mapped.toString());
+      if (mapped !== null) {
+        node.setAttribute("href", mapped.toString());
+        if (node.href) node.href = mapped.toString();
+      }
     }
   };
+
+  // 拦截 window.open 弹出与下载
+  if (typeof window.open === "function") {
+    var nativeWindowOpen = window.open.bind(window);
+    window.open = function (url, target, features) {
+      var mapped = toGatewayUrl(url);
+      return nativeWindowOpen(mapped !== null ? mapped.toString() : url, target, features);
+    };
+  }
+
+  // 拦截 <a> 标签动态下载与跳转
+  if (typeof HTMLAnchorElement !== "undefined") {
+    var anchorProto = HTMLAnchorElement.prototype;
+    var hrefDesc = Object.getOwnPropertyDescriptor(anchorProto, "href");
+    if (hrefDesc && hrefDesc.set) {
+      var nativeHrefSet = hrefDesc.set;
+      Object.defineProperty(anchorProto, "href", {
+        set: function (val) {
+          var mapped = toGatewayUrl(val);
+          return nativeHrefSet.call(this, mapped !== null ? mapped.toString() : val);
+        },
+        get: hrefDesc.get,
+        configurable: true,
+        enumerable: true
+      });
+    }
+
+    if (anchorProto.click) {
+      var nativeAnchorClick = anchorProto.click;
+      anchorProto.click = function () {
+        var href = this.getAttribute("href") || this.href;
+        var mapped = toGatewayUrl(href);
+        if (mapped !== null) {
+          this.setAttribute("href", mapped.toString());
+          if (this.href) this.href = mapped.toString();
+        }
+        return nativeAnchorClick.apply(this, arguments);
+      };
+    }
+  }
+
+  // 全局捕获点击 <a> 标签
+  window.addEventListener("click", function (e) {
+    var target = e.target;
+    while (target && target.tagName !== "A") {
+      target = target.parentElement;
+    }
+    if (target && target.tagName === "A") {
+      var href = target.getAttribute("href") || target.href;
+      var mapped = toGatewayUrl(href);
+      if (mapped !== null) {
+        target.setAttribute("href", mapped.toString());
+        if (target.href) target.href = mapped.toString();
+      }
+    }
+  }, true);
   var nativeAppend = Element.prototype.append;
   if (nativeAppend) {
     Element.prototype.append = function () {
