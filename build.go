@@ -206,7 +206,10 @@ func fixPermissions(targetDir string) {
 				if info.IsDir() {
 					_ = os.Chmod(p, 0755)
 				} else {
-					if targetUID >= 0 {
+					baseName := filepath.Base(p)
+					if baseName == ".credentials.yaml" || baseName == ".credentials.yml" || strings.HasPrefix(baseName, ".credentials") {
+						_ = os.Chmod(p, 0600)
+					} else if targetUID >= 0 {
 						_ = os.Chmod(p, 0644)
 					} else {
 						_ = os.Chmod(p, 0666)
@@ -220,6 +223,12 @@ func fixPermissions(targetDir string) {
 	// 深度修复用户核心数据目录，确立 deepseek.harness 属主
 	fixDirRecursive(filepath.Join(pkgVarDir, "dsh-data"))
 	fixDirRecursive(filepath.Join(pkgVarDir, "home"))
+
+	// 确保敏感凭据文件仅属主可读写 (mode 600)
+	credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
+	if _, err := os.Stat(credFile); err == nil {
+		_ = os.Chmod(credFile, 0600)
+	}
 
 	// 针对 landlock-run 等原生沙箱组件赋予可执行权限
 	landlockBin := landlockBinPath()
