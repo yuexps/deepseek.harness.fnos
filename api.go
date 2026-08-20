@@ -32,6 +32,7 @@ func InitRoutes(r *gin.Engine) {
 	{
 		api.GET("/ws", handleWS)
 		api.POST("/action", handleAction)
+		api.GET("/check-update", handleCheckUpdate)
 		api.GET("/logs", handleGetLogs)
 		api.DELETE("/logs", handleDeleteLogs)
 		api.GET("/logs/download", handleDownloadLogs)
@@ -43,7 +44,6 @@ func InitRoutes(r *gin.Engine) {
 		api.POST("/plugins/preview", handlePluginPreview)
 		api.POST("/plugins/run", handlePluginRun)
 		api.POST("/plugins/toggle", handlePluginToggle)
-		api.POST("/plugins/disable-broken", handlePluginDisableAllBroken)
 		api.POST("/plugins/cancel", handlePluginCancel)
 	}
 
@@ -299,15 +299,23 @@ func handleAction(c *gin.Context) {
 			Fail(c, actionErrStatus(err), err.Error())
 			return
 		}
-	case "upgrade", "rebuild":
+	case "upgrade", "rebuild", "repair", "reset":
 		if state.Status() == StatusBuilding {
 			Fail(c, http.StatusConflict, "正在构建中，请稍候再试")
 			return
 		}
-		if req.Action == "upgrade" {
+		switch req.Action {
+		case "upgrade":
 			Upgrade()
-		} else {
+		case "rebuild":
 			Rebuild()
+		default:
+			tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
+			if _, err := os.Stat(tarPath); err != nil {
+				Fail(c, http.StatusBadRequest, "未检测到内置离线安装包，无法执行恢复出厂设置")
+				return
+			}
+			RepairEnvironment()
 		}
 	default:
 		Fail(c, http.StatusBadRequest, "未知操作: "+req.Action)
@@ -317,18 +325,29 @@ func handleAction(c *gin.Context) {
 	var msg string
 	switch req.Action {
 	case "start":
-		msg = "启动指令已发送，正在等待服务就绪…"
+		msg = "服务正在启动…"
 	case "stop":
 		msg = "服务已停止"
 	case "restart":
-		msg = "重启指令已发送，正在等待服务就绪…"
+		msg = "服务正在重启…"
 	case "upgrade":
 		msg = "开始拉取远程更新并构建…"
 	case "rebuild":
 		msg = "开始强制重建源码…"
+	case "repair", "reset":
+		msg = "开始恢复出厂设置…"
 	}
 
 	OKMsg(c, msg, statusPayload())
+}
+
+func handleCheckUpdate(c *gin.Context) {
+	res, err := CheckUpdate()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OKMsg(c, res.Message, res)
 }
 
 // actionErrStatus 将动作前置错误映射为合适的 HTTP 状态码

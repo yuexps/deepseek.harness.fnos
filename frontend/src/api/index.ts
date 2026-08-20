@@ -1,6 +1,7 @@
 import { http } from '../utils/http'
 import type {
   StatusData,
+  CheckUpdateResult,
   WorkspaceData,
   PluginListPayload,
   PluginStatus,
@@ -14,6 +15,7 @@ import type {
  */
 export const systemApi = {
   getStatus: () => http.get<StatusData>('config'),
+  checkUpdate: () => http.get<CheckUpdateResult>('check-update'),
   sendAction: (action: 'start' | 'stop' | 'restart' | 'upgrade' | 'rebuild' | string) =>
     http.post<StatusData>('action', { action })
 }
@@ -35,7 +37,6 @@ export const pluginApi = {
   run: (command: string) => http.post<{ command: string }>('plugins/run', { command }),
   toggle: (name: string, enabled: boolean) =>
     http.post<{ name: string; enabled: boolean }>('plugins/toggle', { name, enabled }),
-  disableAllBroken: () => http.post<{ disabled: string[] }>('plugins/disable-broken'),
   cancel: () => http.post('plugins/cancel')
 }
 

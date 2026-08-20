@@ -52,8 +52,7 @@
                 <n-tooltip trigger="hover" :disabled="isTouch">
                   <template #trigger>
                     <div
-                      class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/[0.06] group-hover:bg-blue-50 dark:group-hover:bg-blue-950/40 text-slate-500 dark:text-slate-400 group-hover:text-fnos-blue dark:group-hover:text-blue-400 flex items-center justify-center transition-all duration-200 group-hover:scale-105"
-                    >
+                      class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/[0.06] group-hover:bg-blue-50 dark:group-hover:bg-blue-950/40 text-slate-500 dark:text-slate-400 group-hover:text-fnos-blue dark:group-hover:text-blue-400 flex items-center justify-center transition-all duration-200 group-hover:scale-105">
                       <n-icon :size="22">
                         <Folder />
                       </n-icon>
@@ -65,7 +64,8 @@
 
               <!-- 标题 -->
               <template #header>
-                <div class="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate transition-colors group-hover:text-fnos-blue dark:group-hover:text-blue-400">
+                <div
+                  class="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate transition-colors group-hover:text-fnos-blue dark:group-hover:text-blue-400">
                   <n-ellipsis :line-clamp="1" :tooltip="!isTouch">
                     {{ item.title || item.workspaceId || '-' }}
                   </n-ellipsis>
@@ -95,7 +95,8 @@
 
               <!-- 底部：左侧更新时间，右侧创建时间（全部统一 NTooltip） -->
               <template #footer>
-                <div class="flex items-center justify-between gap-2 text-[11px] text-slate-400 dark:text-slate-500 pt-0.5 w-full min-w-0">
+                <div
+                  class="flex items-center justify-between gap-2 text-[11px] text-slate-400 dark:text-slate-500 pt-0.5 w-full min-w-0">
                   <!-- 左侧：更新时间 -->
                   <n-tooltip v-if="item.updatedAt" trigger="hover" :disabled="isTouch">
                     <template #trigger>
@@ -103,7 +104,8 @@
                         <n-icon :size="12">
                           <Clock />
                         </n-icon>
-                        <span class="whitespace-nowrap">更新于 <n-time :time="new Date(item.updatedAt)" type="relative" /></span>
+                        <span class="whitespace-nowrap">更新于 <n-time :time="new Date(item.updatedAt)"
+                            type="relative" /></span>
                       </div>
                     </template>
                     更新于: {{ new Date(item.updatedAt).toLocaleString() }}
@@ -112,11 +114,13 @@
                   <!-- 右侧：创建时间 -->
                   <n-tooltip v-if="item.createdAt" trigger="hover" :disabled="isTouch">
                     <template #trigger>
-                      <div class="flex items-center gap-1 text-slate-400/80 dark:text-slate-500 min-w-0 truncate justify-end cursor-default">
+                      <div
+                        class="flex items-center gap-1 text-slate-400/80 dark:text-slate-500 min-w-0 truncate justify-end cursor-default">
                         <n-icon :size="12" class="shrink-0">
                           <Calendar />
                         </n-icon>
-                        <span class="truncate">创建于 <n-time :time="new Date(item.createdAt)" format="yyyy-MM-dd" /></span>
+                        <span class="truncate">创建于 <n-time :time="new Date(item.createdAt)"
+                            format="yyyy-MM-dd" /></span>
                       </div>
                     </template>
                     创建于: {{ new Date(item.createdAt).toLocaleString() }}

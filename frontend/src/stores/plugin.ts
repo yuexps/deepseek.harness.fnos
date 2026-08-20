@@ -12,7 +12,7 @@ export const usePluginStore = defineStore('plugin', () => {
   const preview = ref<PreviewResult | null>(null)
 
   const searchKeyword = ref('')
-  const filterStatus = ref<'all' | 'live' | 'disabled' | 'inert' | 'broken'>('all')
+  const filterStatus = ref<'all' | 'live' | 'disabled' | 'inert'>('all')
 
   const needRestart = ref(false)
 
@@ -54,6 +54,10 @@ export const usePluginStore = defineStore('plugin', () => {
     }, 200)
   }
 
+  function fillDshMarketCommand() {
+    setCommand('dsh plugin --profile web add dshmarket')
+  }
+
   const canInstall = computed(() => {
     return Boolean(!pluginBusy.value && command.value.trim() && preview.value?.valid)
   })
@@ -62,9 +66,6 @@ export const usePluginStore = defineStore('plugin', () => {
   const liveCount = computed(() => plugins.value.filter(p => p.state === 'live').length)
   const disabledCount = computed(() => plugins.value.filter(p => p.state === 'disabled').length)
   const inertCount = computed(() => plugins.value.filter(p => p.state === 'inert').length)
-  const brokenCount = computed(() => plugins.value.filter(p => p.state === 'broken').length)
-  const brokenPlugins = computed(() => plugins.value.filter(p => p.state === 'broken'))
-  const hasBrokenPlugin = computed(() => brokenPlugins.value.length > 0)
 
   // 过滤后的插件列表
   const filteredPlugins = computed(() => {
@@ -103,9 +104,38 @@ export const usePluginStore = defineStore('plugin', () => {
     }
   }
 
+  let busyWatchTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearBusyWatchTimer() {
+    if (busyWatchTimer) {
+      clearTimeout(busyWatchTimer)
+      busyWatchTimer = null
+    }
+  }
+
+  function startBusyWatchTimer() {
+    clearBusyWatchTimer()
+    busyWatchTimer = setTimeout(async () => {
+      try {
+        const res = await pluginApi.getStatus()
+        if (res.success && res.data) {
+          updatePluginStatus(res.data)
+        }
+      } catch {
+        pluginBusy.value = false
+        await fetchPlugins()
+      }
+    }, 190000)
+  }
+
   function updatePluginStatus(s: PluginStatus) {
     const wasBusy = pluginBusy.value
     pluginBusy.value = s.running
+    if (s.running) {
+      startBusyWatchTimer()
+    } else {
+      clearBusyWatchTimer()
+    }
     if (wasBusy && !s.running) {
       if (s.ok) {
         needRestart.value = true
@@ -142,14 +172,6 @@ export const usePluginStore = defineStore('plugin', () => {
     return pluginApi.run(`dsh plugin --profile web remove ${name}`)
   }
 
-  async function disableAllBroken(): Promise<RequestResult<unknown>> {
-    const res = await pluginApi.disableAllBroken()
-    if (res.success) {
-      await fetchPlugins()
-    }
-    return res
-  }
-
   async function cancelPluginOp(): Promise<RequestResult<unknown>> {
     return pluginApi.cancel()
   }
@@ -167,18 +189,15 @@ export const usePluginStore = defineStore('plugin', () => {
     liveCount,
     disabledCount,
     inertCount,
-    brokenCount,
-    brokenPlugins,
-    hasBrokenPlugin,
     filteredPlugins,
     markRestartNeeded,
     clearRestartNeeded,
     setCommand,
+    fillDshMarketCommand,
     fetchPlugins,
     updatePluginStatus,
     installPlugin,
     togglePlugin,
-    disableAllBroken,
     cancelPluginOp,
     updatePlugin,
     uninstallPlugin

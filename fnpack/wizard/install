@@ -1,11 +1,11 @@
 [
     {
-        "stepTitle": "存储配置",
+        "stepTitle": "存储与运行配置",
         "items": [
             {
                 "type": "radio",
                 "field": "wizard_data_library_type",
-                "label": "应用数据位置",
+                "label": "DSH 存储位置",
                 "initValue": "data",
                 "options": [
                     {
@@ -20,9 +20,35 @@
                 "rules": [
                     {
                         "required": true,
-                        "message": "请选择应用数据位置"
+                        "message": "请选择 DSH 存储位置"
                     }
                 ]
+            },
+            {
+                "type": "radio",
+                "field": "wizard_dsh_run_user",
+                "label": "DSH 运行权限",
+                "initValue": "root",
+                "options": [
+                    {
+                        "label": "超级管理员 (Root)",
+                        "value": "root"
+                    },
+                    {
+                        "label": "普通用户 (Package)",
+                        "value": "package"
+                    }
+                ],
+                "rules": [
+                    {
+                        "required": true,
+                        "message": "请选择 DSH 运行权限"
+                    }
+                ]
+            },
+            {
+                "type": "tips",
+                "helpText": "<strong>注意：</strong>相关配置仅限安装时选定，安装完成后请勿随意修改，否则可能引发权限异常、服务无法启动或数据丢失。"
             }
         ]
     }

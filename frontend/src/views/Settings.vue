@@ -5,36 +5,21 @@
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">应用设置</h1>
 
       <!-- 右侧同行操作按钮组 -->
-      <div v-auto-animate class="flex items-center gap-2">
-        <n-button
-          v-if="isChanged"
-          size="small"
-          :disabled="saving"
-          @click="handleReset"
-          class="!h-9 !px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95"
-        >
+      <div v-auto-animate class="flex items-center gap-2 shrink-0">
+        <n-button v-if="isChanged" size="small" :disabled="saving" @click="handleReset"
+          class="!h-8 !px-3 rounded-lg text-xs font-medium transition-transform duration-150 active:scale-95">
           <template #icon>
-            <n-icon>
+            <n-icon :size="15">
               <X />
             </n-icon>
           </template>
           取消
         </n-button>
 
-        <n-button
-          type="primary"
-          size="small"
-          :loading="saving"
-          :disabled="!isChanged || loadError || !configLoaded"
+        <n-button type="primary" size="small" :loading="saving" :disabled="!isChanged || loadError || !configLoaded"
           @click="handleSave"
-          class="!h-9 !px-4 rounded-xl font-medium shadow-sm shadow-fnos-blue/20 transition-all duration-150 active:scale-95"
-        >
-          <template #icon v-if="!saving">
-            <n-icon>
-              <DeviceFloppy />
-            </n-icon>
-          </template>
-          保存
+          class="!h-8 !px-3 rounded-lg text-xs font-medium shadow-xs shadow-fnos-blue/20 transition-all duration-150 active:scale-95 shrink-0">
+          保存设置
         </n-button>
       </div>
     </div>
@@ -45,7 +30,8 @@
       <n-card v-if="loadError && !configLoaded" :bordered="false" class="shadow-sm py-12 text-center rounded-2xl">
         <n-empty description="配置加载失败">
           <template #extra>
-            <n-button size="small" secondary @click="configStore.fetchConfig(true)" class="transition-transform duration-150 active:scale-95">
+            <n-button size="small" secondary @click="configStore.fetchConfig(true)"
+              class="transition-transform duration-150 active:scale-95">
               重新加载
             </n-button>
           </template>
@@ -66,7 +52,8 @@
                       <span>内部监听端口</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
-                          <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                             <Help />
                           </n-icon>
                         </template>
@@ -74,13 +61,8 @@
                       </n-tooltip>
                     </div>
                   </template>
-                  <n-input-number
-                    v-model:value="config.server_port"
-                    :min="1"
-                    :max="65535"
-                    placeholder="2298"
-                    class="w-full"
-                  />
+                  <n-input-number v-model:value="config.server_port" :min="1" :max="65535" placeholder="2298"
+                    class="w-full" />
                 </n-form-item>
               </n-gi>
 
@@ -91,7 +73,8 @@
                       <span>反向代理端口</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
-                          <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                             <Help />
                           </n-icon>
                         </template>
@@ -99,13 +82,8 @@
                       </n-tooltip>
                     </div>
                   </template>
-                  <n-input-number
-                    v-model:value="config.proxy_port"
-                    :min="1"
-                    :max="65535"
-                    placeholder="2299"
-                    class="w-full"
-                  />
+                  <n-input-number v-model:value="config.proxy_port" :min="1" :max="65535" placeholder="2299"
+                    class="w-full" />
                 </n-form-item>
               </n-gi>
 
@@ -117,7 +95,8 @@
                       <span>打开方式选择</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
-                          <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                             <Help />
                           </n-icon>
                         </template>
@@ -146,7 +125,8 @@
                       <span>访问控制密码</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
-                          <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                             <Help />
                           </n-icon>
                         </template>
@@ -154,13 +134,8 @@
                       </n-tooltip>
                     </div>
                   </template>
-                  <n-input
-                    type="password"
-                    show-password-on="click"
-                    v-model:value="config.access_password"
-                    placeholder="留空则不启用密码保护"
-                    autocomplete="new-password"
-                  />
+                  <n-input type="password" show-password-on="click" v-model:value="config.access_password"
+                    placeholder="留空则不启用密码保护" autocomplete="new-password" />
                 </n-form-item>
               </n-gi>
 
@@ -172,7 +147,8 @@
                       <span>自定义外部访问地址</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
-                          <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                             <Help />
                           </n-icon>
                         </template>
@@ -180,11 +156,8 @@
                       </n-tooltip>
                     </div>
                   </template>
-                  <n-input
-                    v-model:value="config.reverse_proxy_url"
-                    placeholder="例如 https://dsh.example.com:2299"
-                    clearable
-                  />
+                  <n-input v-model:value="config.reverse_proxy_url" placeholder="例如 https://dsh.example.com:2299"
+                    clearable />
                 </n-form-item>
               </n-gi>
             </n-grid>
@@ -198,7 +171,8 @@
                   <span>网络代理地址 (HTTP / SOCKS5)</span>
                   <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                     <template #trigger>
-                      <n-icon size="14" class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                      <n-icon size="14"
+                        class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
                         <Help />
                       </n-icon>
                     </template>
@@ -206,12 +180,29 @@
                   </n-tooltip>
                 </div>
               </template>
-              <n-input
-                v-model:value="config.network_proxy"
-                placeholder="例如 http://192.168.1.100:7890 或 socks5://192.168.1.100:7890"
-                clearable
-              />
+              <n-input v-model:value="config.network_proxy"
+                placeholder="例如 http://192.168.1.100:7890 或 socks5://192.168.1.100:7890" clearable />
             </n-form-item>
+          </n-card>
+
+          <!-- 运行环境重置卡片 -->
+          <n-card title="重置修复" :bordered="false"
+            class="shadow-sm rounded-2xl border border-rose-100 dark:border-rose-950/40">
+            <div class="space-y-2">
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
+                  重置为初始运行环境
+                </div>
+                <n-button type="error" size="small" secondary :loading="systemStore.isBuilding"
+                  :disabled="systemStore.isActionLocked" @click="handleRepairEnvironment"
+                  class="shrink-0 !h-8 !px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95">
+                  重置
+                </n-button>
+              </div>
+              <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                适用于插件冲突、环境损坏或服务启动异常等场景。将移除所有第三方插件与补丁修改并恢复纯净环境，您的模型 API 密钥、历史会话记录与系统设置将完整保留。
+              </div>
+            </div>
           </n-card>
         </div>
       </n-form>
@@ -241,7 +232,7 @@ import {
   type FormInst,
   type FormRules
 } from 'naive-ui'
-import { Help, DeviceFloppy, X } from '@vicons/tabler'
+import { Help, X } from '@vicons/tabler'
 import { useConfigStore } from '../stores/config'
 import { useSystemStore } from '../stores/system'
 import { trimSdk } from '../utils/trimSdk'
@@ -395,5 +386,23 @@ function handleReset() {
   configStore.resetConfig()
   formRef.value?.restoreValidation()
   message.info('已取消修改')
+}
+
+// 重置运行环境（全局模态确认弹窗）
+function handleRepairEnvironment() {
+  dialog.warning({
+    title: '确认重置运行环境？',
+    content: '此操作将终止当前服务并重新部署内置版本，清空所有第三方插件、依赖修改与补丁配置。您的模型 API 密钥、历史会话记录与系统设置将完整保留。是否确认继续？',
+    positiveText: '确认重置',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      const res = await systemStore.sendAction('repair')
+      if (res.success) {
+        message.success(res.message || '已开始重置运行环境…')
+      } else {
+        message.error(res.message || '重置运行环境失败')
+      }
+    }
+  })
 }
 </script>

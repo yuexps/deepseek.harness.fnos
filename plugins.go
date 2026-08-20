@@ -13,9 +13,30 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+const (
+	pluginRemoveTimeout  = 60 * time.Second
+	pluginInstallTimeout = 180 * time.Second
+	pluginSyncTimeout    = 30 * time.Second
+)
+
+// pluginEnv 注入网络超时与重试收敛参数，防止 npm/pnpm 无限挂起
+func pluginEnv() []string {
+	return append(os.Environ(),
+		"NPM_CONFIG_FETCH_TIMEOUT=30000",
+		"NPM_CONFIG_NETWORK_TIMEOUT=30000",
+		"NPM_CONFIG_FETCH_RETRIES=2",
+		"NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=2000",
+		"NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=10000",
+		"PNPM_CONFIG_FETCH_TIMEOUT=30000",
+		"PNPM_CONFIG_NETWORK_TIMEOUT=30000",
+		"PNPM_CONFIG_FETCH_RETRIES=2",
+	)
+}
 
 type pluginVerb string
 
@@ -184,10 +205,56 @@ func parsePluginCommand(input string) (*pluginCommand, error) {
 	return cmd, nil
 }
 
+func profileHasWorkspace() bool {
+	_, err := os.Stat(filepath.Join(pluginProfileDir(), "pnpm-workspace.yaml"))
+	return err == nil
+}
+
+// resolveUpdateTarget 智能解析待更新插件的真实目标来源 (支持 Git 依赖、Scoped 包名与 @latest)
+func resolveUpdateTarget(spec string) string {
+	norm := normalizePluginKey(spec)
+	deps, _, _, err := readProfileManifest()
+	if err == nil && deps != nil {
+		if origSpec, exists := deps[norm]; exists && origSpec != "" {
+			if strings.HasPrefix(origSpec, "github:") ||
+				strings.HasPrefix(origSpec, "git+") ||
+				strings.HasPrefix(origSpec, "http:") ||
+				strings.HasPrefix(origSpec, "https:") {
+				return origSpec
+			}
+		}
+	}
+
+	target := norm
+	// 针对 npm 包名（包含 scoped 作用域包）精准锁定最新版本 @latest
+	if strings.HasPrefix(target, "@") {
+		// scoped 包（如 @cordisjs/plugin-xxx），检查除去开头的 @ 之后是否显式指定了版本
+		if !strings.Contains(target[1:], "@") {
+			target = target + "@latest"
+		}
+	} else if !strings.Contains(target, "@") && !strings.HasPrefix(target, "github:") {
+		target = target + "@latest"
+	}
+	return target
+}
+
 func (c *pluginCommand) dshArgs() []string {
-	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
 	if c.Verb == pluginUpdate {
-		args = append(args, "--latest")
+		// 更新操作重构：注入 minimumReleaseAge=0 穿透 pnpm 11 新鲜期限制，并解析真实最新目标
+		args := []string{"plugin", "--profile", c.Profile, "add"}
+		if profileHasWorkspace() {
+			args = append(args, "-w")
+		}
+		args = append(args, "--config.minimumReleaseAge=0")
+		for _, spec := range c.Specs {
+			args = append(args, resolveUpdateTarget(spec))
+		}
+		return args
+	}
+
+	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
+	if (c.Verb == pluginAdd || c.Verb == pluginRemove) && profileHasWorkspace() {
+		args = append(args, "-w")
 	}
 	args = append(args, c.Specs...)
 	return args
@@ -201,12 +268,12 @@ func pluginProfileDir() string {
 	return filepath.Join(pkgVarDir, "dsh-data", "profiles", "web")
 }
 
-// pluginItem 前端呈现的富元数据插件模型
+// pluginItem 前端呈现的元数据插件模型
 type pluginItem struct {
 	Name        string   `json:"name"`
 	Version     string   `json:"version,omitempty"`
 	Spec        string   `json:"spec,omitempty"`
-	State       string   `json:"state"` // "live", "disabled", "inert", "broken"
+	State       string   `json:"state"` // "live", "disabled", "inert"
 	Layer       bool     `json:"layer"` // 兼容字段: State == "live"
 	EntryIDs    []string `json:"entryIds,omitempty"`
 	Description string   `json:"description,omitempty"`
@@ -216,7 +283,6 @@ type pluginItem struct {
 	Keywords    []string `json:"keywords,omitempty"`
 	IsProtected bool     `json:"isProtected"`
 	HasBundle   bool     `json:"hasBundle"`
-	ErrorReason string   `json:"errorReason,omitempty"`
 }
 
 type pluginListPayload struct {
@@ -242,84 +308,6 @@ func profileManifestPath() string {
 	return filepath.Join(pluginProfileDir(), "package.json")
 }
 
-// snapshotManifest 抓取当前 package.json 快照
-func snapshotManifest() []byte {
-	data, err := os.ReadFile(profileManifestPath())
-	if err != nil {
-		return nil
-	}
-	return data
-}
-
-// rollbackManifest 回滚 package.json 到安全快照状态（防幽灵依赖残留）
-func rollbackManifest(snapshot []byte) {
-	if len(snapshot) == 0 {
-		return
-	}
-	if err := os.WriteFile(profileManifestPath(), snapshot, 0644); err != nil {
-		LogWarning("[事务回滚] 还原 package.json 失败: %s", err)
-	} else {
-		LogInfo("[事务回滚] 插件操作失败，已自动将 package.json 还原至安全状态")
-	}
-}
-
-// verifyInstalledPluginEntry 校验已安装插件是否具备有效物理入口文件（防假成功）
-func verifyInstalledPluginEntry(spec string) error {
-	norm := normalizePluginKey(spec)
-	meta, found := installedPluginMetadata(norm)
-	if !found {
-		return nil
-	}
-
-	pkgDir := filepath.Join(pluginProfileDir(), "node_modules", meta.Name)
-	if _, err := os.Stat(pkgDir); err != nil {
-		pkgDir = filepath.Join(srcDir, "node_modules", meta.Name)
-		if _, err := os.Stat(pkgDir); err != nil {
-			return nil
-		}
-	}
-
-	pkgJsonPath := filepath.Join(pkgDir, "package.json")
-	data, err := os.ReadFile(pkgJsonPath)
-	if err != nil {
-		return nil
-	}
-
-	var raw struct {
-		Main   string `json:"main"`
-		Module string `json:"module"`
-	}
-	_ = json.Unmarshal(data, &raw)
-
-	// 候选入口文件探测
-	var entryCandidates []string
-	if raw.Main != "" {
-		entryCandidates = append(entryCandidates, raw.Main)
-	}
-	if raw.Module != "" {
-		entryCandidates = append(entryCandidates, raw.Module)
-	}
-	entryCandidates = append(entryCandidates, "index.js", "dist/index.js", "lib/index.js", "dist/index.mjs", "lib/index.mjs")
-
-	hasValidFile := false
-	for _, candidate := range entryCandidates {
-		targetFile := filepath.Join(pkgDir, filepath.FromSlash(candidate))
-		if st, err := os.Stat(targetFile); err == nil && !st.IsDir() {
-			hasValidFile = true
-			break
-		}
-		if st, err := os.Stat(targetFile + ".js"); err == nil && !st.IsDir() {
-			hasValidFile = true
-			break
-		}
-	}
-
-	if !hasValidFile && (raw.Main != "" || raw.Module != "") {
-		return fmt.Errorf("插件「%s」缺少可执行入口文件（package.json 指向的 main/module 文件不存在，可能是镜像源同步缺失产物）", meta.Name)
-	}
-	return nil
-}
-
 // checkDuplicatePlugin 检查插件是否已经安装
 func checkDuplicatePlugin(spec string) error {
 	norm := normalizePluginKey(spec)
@@ -328,7 +316,7 @@ func checkDuplicatePlugin(spec string) error {
 		return nil
 	}
 	if currentSpec, exists := deps[norm]; exists {
-		return fmt.Errorf("插件「%s」已安装 (版本: %s)，如需更新请在列表中点击【更新】", norm, currentSpec)
+		return fmt.Errorf("插件「%s」已安装 (当前版本: %s)", norm, currentSpec)
 	}
 	return nil
 }
@@ -448,9 +436,6 @@ func handleListPlugins(c *gin.Context) {
 		}
 	}
 
-	// 故障插件映射
-	failedMap := GetFailedPlugins()
-
 	names := make([]string, 0, len(deps))
 	for name := range deps {
 		names = append(names, name)
@@ -466,37 +451,18 @@ func handleListPlugins(c *gin.Context) {
 
 		// 判定插件当前状态
 		stateVal := "live"
-		errorReason := ""
-
-		// 1. 检查是否存在加载崩溃
-		if failure, isBroken := failedMap[name]; isBroken {
-			stateVal = "broken"
-			errorReason = failure.Reason
-		} else {
-			for _, eid := range entryIDs {
-				if f, ok := failedMap[eid]; ok {
-					stateVal = "broken"
-					errorReason = f.Reason
-					break
-				}
+		isDisabled := false
+		for _, eid := range entryIDs {
+			if disabledMap[eid] {
+				isDisabled = true
+				break
 			}
 		}
-
-		// 2. 若未崩溃，检查是否被 patch 显式禁用
-		if stateVal != "broken" {
-			isDisabled := false
-			for _, eid := range entryIDs {
-				if disabledMap[eid] {
-					isDisabled = true
-					break
-				}
-			}
-			if isDisabled {
-				stateVal = "disabled"
-			} else if !hasBundle && !bundleSet[name] {
-				// 未声明 dsh.bundle，作为普通依赖存在
-				stateVal = "inert"
-			}
+		if isDisabled {
+			stateVal = "disabled"
+		} else if !hasBundle && !bundleSet[name] {
+			// 未声明 dsh.bundle，作为普通依赖存在
+			stateVal = "inert"
 		}
 
 		plugins = append(plugins, pluginItem{
@@ -513,7 +479,6 @@ func handleListPlugins(c *gin.Context) {
 			Keywords:    meta.Keywords,
 			IsProtected: isProtected,
 			HasBundle:   hasBundle,
-			ErrorReason: errorReason,
 		})
 	}
 
@@ -554,7 +519,7 @@ func setPluginRunning() error {
 		return fmt.Errorf("服务正在启动中，请稍候再试")
 	}
 	if _, err := os.Stat(filepath.Join(srcDir, "node_modules")); err != nil {
-		return fmt.Errorf("依赖未安装，请先点击【强制重建】")
+		return fmt.Errorf("运行环境未就绪或依赖文件缺失")
 	}
 	pluginOp = pluginOpState{Running: true}
 	notifyPlugin()
@@ -639,7 +604,7 @@ func pluginFailMessage(err error, tail string) string {
 	if strings.Contains(tail, "ERR_PNPM_IGNORED_BUILDS") ||
 		strings.Contains(tail, "approve-builds") ||
 		strings.Contains(tail, "allowBuilds") {
-		msg += "\n提示：构建脚本被 pnpm 拦截。管理器已自动放行并重试；若仍失败，请检查 pnpm-workspace.yaml 的 allowBuilds 配置。"
+		msg += "\n构建脚本被 pnpm 拦截，已自动配置放行并重试。"
 	}
 	return msg
 }
@@ -658,6 +623,7 @@ var (
 	activePluginCmdMu    sync.Mutex
 	activePluginCmd      *exec.Cmd
 	activePluginCanceled bool
+	activePluginTimedOut bool
 )
 
 // cancelActivePlugin 终止当前正在运行的插件进程树
@@ -682,7 +648,7 @@ func handlePluginCancel(c *gin.Context) {
 	OKMsg(c, "已发送取消指令", nil)
 }
 
-func runPluginSubprocess(cmdArgs []string) error {
+func runPluginSubprocess(cmdArgs []string, timeout time.Duration) error {
 	tail := newTailWriter(800)
 	outWriter := NewLogWriterInfo()
 	errWriter := NewLogWriterWarn()
@@ -692,6 +658,7 @@ func runPluginSubprocess(cmdArgs []string) error {
 	bin, args := dshCliCmd(cmdArgs...)
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = srcDir
+	cmd.Env = pluginEnv()
 	setProcessGroup(cmd)
 	cmd.Stdout = io.MultiWriter(outWriter, tail)
 	cmd.Stderr = io.MultiWriter(errWriter, tail)
@@ -703,6 +670,7 @@ func runPluginSubprocess(cmdArgs []string) error {
 	activePluginCmdMu.Lock()
 	activePluginCmd = cmd
 	activePluginCanceled = false
+	activePluginTimedOut = false
 	activePluginCmdMu.Unlock()
 
 	defer func() {
@@ -711,20 +679,50 @@ func runPluginSubprocess(cmdArgs []string) error {
 		activePluginCmdMu.Unlock()
 	}()
 
-	err := cmd.Wait()
-	if err != nil {
-		activePluginCmdMu.Lock()
-		canceled := activePluginCanceled
-		activePluginCmdMu.Unlock()
-		if canceled {
-			return fmt.Errorf("操作已被用户手动取消")
-		}
-		return fmt.Errorf("%s", pluginFailMessage(err, tail.String()))
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	var timer *time.Timer
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
 	}
-	return nil
+
+	select {
+	case <-timeoutCh:
+		activePluginCmdMu.Lock()
+		activePluginTimedOut = true
+		activePluginCmdMu.Unlock()
+		if cmd.Process != nil {
+			pid := cmd.Process.Pid
+			LogWarning("[插件管理] 操作执行超时 (%v)，正在强制终止进程组 (PID: %d)...", timeout, pid)
+			killProcessTree(pid)
+		}
+		_ = <-done
+		return fmt.Errorf("插件操作超时（超过 %v），网络请求或依赖解析未能按时完成，已自动终止", timeout)
+	case err := <-done:
+		if err != nil {
+			activePluginCmdMu.Lock()
+			canceled := activePluginCanceled
+			timedOut := activePluginTimedOut
+			activePluginCmdMu.Unlock()
+			if canceled {
+				return fmt.Errorf("操作已被用户手动取消")
+			}
+			if timedOut {
+				return fmt.Errorf("插件操作超时（超过 %v），已自动终止", timeout)
+			}
+			return fmt.Errorf("%s", pluginFailMessage(err, tail.String()))
+		}
+		return nil
+	}
 }
 
-func runPluginSync(cmdArgs []string) (string, error) {
+func runPluginSync(cmdArgs []string, timeout time.Duration) (string, error) {
 	outWriter := NewLogWriterInfo()
 	errWriter := NewLogWriterWarn()
 	defer outWriter.Flush()
@@ -733,6 +731,7 @@ func runPluginSync(cmdArgs []string) (string, error) {
 	bin, args := dshCliCmd(cmdArgs...)
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = srcDir
+	cmd.Env = pluginEnv()
 	setProcessGroup(cmd)
 	var buf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(outWriter, &buf)
@@ -745,6 +744,7 @@ func runPluginSync(cmdArgs []string) (string, error) {
 	activePluginCmdMu.Lock()
 	activePluginCmd = cmd
 	activePluginCanceled = false
+	activePluginTimedOut = false
 	activePluginCmdMu.Unlock()
 
 	defer func() {
@@ -753,17 +753,47 @@ func runPluginSync(cmdArgs []string) (string, error) {
 		activePluginCmdMu.Unlock()
 	}()
 
-	err := cmd.Wait()
-	if err != nil {
-		activePluginCmdMu.Lock()
-		canceled := activePluginCanceled
-		activePluginCmdMu.Unlock()
-		if canceled {
-			return "", fmt.Errorf("操作已被用户手动取消")
-		}
-		return buf.String(), fmt.Errorf("%s", pluginFailMessage(err, buf.String()))
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	var timer *time.Timer
+	var timeoutCh <-chan time.Time
+	if timeout > 0 {
+		timer = time.NewTimer(timeout)
+		defer timer.Stop()
+		timeoutCh = timer.C
 	}
-	return buf.String(), nil
+
+	select {
+	case <-timeoutCh:
+		activePluginCmdMu.Lock()
+		activePluginTimedOut = true
+		activePluginCmdMu.Unlock()
+		if cmd.Process != nil {
+			pid := cmd.Process.Pid
+			LogWarning("[插件管理] 同步操作执行超时 (%v)，正在强制终止进程组 (PID: %d)...", timeout, pid)
+			killProcessTree(pid)
+		}
+		_ = <-done
+		return buf.String(), fmt.Errorf("插件操作超时（超过 %v），已自动终止", timeout)
+	case err := <-done:
+		if err != nil {
+			activePluginCmdMu.Lock()
+			canceled := activePluginCanceled
+			timedOut := activePluginTimedOut
+			activePluginCmdMu.Unlock()
+			if canceled {
+				return "", fmt.Errorf("操作已被用户手动取消")
+			}
+			if timedOut {
+				return "", fmt.Errorf("插件操作超时（超过 %v），已自动终止", timeout)
+			}
+			return buf.String(), fmt.Errorf("%s", pluginFailMessage(err, buf.String()))
+		}
+		return buf.String(), nil
+	}
 }
 
 func pluginAllowKey(cmd *pluginCommand) string {
@@ -780,85 +810,157 @@ func pluginAllowKey(cmd *pluginCommand) string {
 	return strings.Join(keys, " ")
 }
 
-func runPluginOpWithAutoAllow(cmd *pluginCommand, doneMsg string) (string, error) {
-	var out string
-	var runErr error
-	if cmd.Verb == pluginList || cmd.Verb == pluginWhy {
-		out, runErr = runPluginSync(cmd.dshArgs())
-	} else {
-		runErr = runPluginSubprocess(cmd.dshArgs())
+func pluginOpTimeout(verb pluginVerb) time.Duration {
+	switch verb {
+	case pluginRemove:
+		return pluginRemoveTimeout
+	case pluginAdd, pluginUpdate, pluginInstall:
+		return pluginInstallTimeout
+	default:
+		return pluginSyncTimeout
 	}
-	if runErr == nil {
-		if out = strings.TrimSpace(out); out != "" {
-			return out, nil
+}
+
+func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error) {
+	timeout := pluginOpTimeout(cmd.Verb)
+	args := cmd.dshArgs()
+
+	if cmd.Verb == pluginList || cmd.Verb == pluginWhy {
+		out, runErr := runPluginSync(args, timeout)
+		if runErr != nil {
+			return "", fmt.Errorf("%s", FormatPnpmFailureMessage(runErr.Error()))
 		}
+		return strings.TrimSpace(out), nil
+	}
+
+	runErr := runPluginSubprocess(args, timeout)
+	if runErr == nil {
 		return doneMsg, nil
 	}
 
 	if cmd.Verb != pluginAdd && cmd.Verb != pluginUpdate && cmd.Verb != pluginInstall {
-		return "", runErr
+		return "", fmt.Errorf("%s", FormatPnpmFailureMessage(runErr.Error()))
 	}
 
-	if strings.Contains(runErr.Error(), "ERR_PNPM_UNEXPECTED_STORE") {
+	failure := ClassifyPnpmFailure(runErr.Error())
+
+	// 1. 跨大版本 Hoist 差异自愈：node_modules 是旧版 pnpm 创建的
+	if failure.Code == PnpmFailureHoistPatternDiff {
+		LogWarning("[自动自愈] 依赖结构存在跨版本差异，正在执行重建 (pnpm install --no-frozen-lockfile)...")
+		_ = runPluginSubprocess([]string{"plugin", "--profile", cmd.Profile, "install", "--no-frozen-lockfile"}, timeout)
+		if runErr = runPluginSubprocess(args, timeout); runErr == nil {
+			return doneMsg + "（已自动重建依赖环境）", nil
+		}
+		failure = ClassifyPnpmFailure(runErr.Error())
+	}
+
+	// 2. 存储位置变更异常
+	if failure.Code == PnpmFailureUnexpectedStore {
 		_ = os.RemoveAll(filepath.Join(pluginProfileDir(), "node_modules"))
-		LogWarning("检测到依赖存储位置变更，已自动清理缓存并重新执行: %s", cmd.display())
-		if runErr = runPluginSubprocess(cmd.dshArgs()); runErr == nil {
+		LogWarning("[自动自愈] 存储位置变更，已自动清理本地缓存并重试: %s", cmd.display())
+		if runErr = runPluginSubprocess(args, timeout); runErr == nil {
 			return doneMsg, nil
+		}
+		failure = ClassifyPnpmFailure(runErr.Error())
+	}
+
+	// 3. 新鲜发布版本被安全等待期锁定 (release-age-violation)
+	if failure.Code == PnpmFailureReleaseAge {
+		LogWarning("[自动自愈] 新发布版本受安全期检查拦截，已自动追加 --config.minimumReleaseAge=0 重试...")
+		retryArgs := append([]string{}, args...)
+		retryArgs = append(retryArgs, "--config.minimumReleaseAge=0")
+		if runErr = runPluginSubprocess(retryArgs, timeout); runErr == nil {
+			return doneMsg + "（已自动放行新发布版本）", nil
+		}
+		failure = ClassifyPnpmFailure(runErr.Error())
+	}
+
+	// 4. 慢网/大包下载超时 (fetch-timeout)
+	if failure.Code == PnpmFailureFetchTimeout {
+		LogWarning("[自动自愈] 大包下载超时，正在以 10 分钟超时延长重试...")
+		retryArgs := append([]string{}, args...)
+		retryArgs = append(retryArgs, "--config.fetchTimeout=600000")
+		if runErr = runPluginSubprocess(retryArgs, timeout+10*time.Minute); runErr == nil {
+			return doneMsg + "（已自动延长超时完成下载）", nil
+		}
+		failure = ClassifyPnpmFailure(runErr.Error())
+	}
+
+	// 5. 瞬态网络抖动 (transient-network)
+	if failure.Code == PnpmFailureTransientNetwork {
+		LogWarning("[自动自愈] 检测到网络瞬时波动，正在自动重试 1 次...")
+		if runErr = runPluginSubprocess(args, timeout); runErr == nil {
+			return doneMsg, nil
+		}
+		failure = ClassifyPnpmFailure(runErr.Error())
+	}
+
+	// 6. 构建脚本拦截 (allowBuilds)
+	pkgs := parseBlockedPackages(runErr.Error())
+	if len(pkgs) > 0 {
+		if err := ensureAllowBuildsFor(cmd.Profile, pluginAllowKey(cmd), pkgs); err == nil {
+			LogWarning("[自动自愈] 构建脚本被拦截 [%s]，已自动配置放行并重新执行", strings.Join(pkgs, ", "))
+			if runErr = runPluginSubprocess(args, timeout); runErr == nil {
+				return doneMsg + "（已自动放行构建脚本: " + strings.Join(pkgs, ", ") + "）", nil
+			}
 		}
 	}
 
-	pkgs := parseBlockedPackages(runErr.Error())
-	if len(pkgs) == 0 {
-		return "", runErr
-	}
-
-	if err := ensureAllowBuildsFor(cmd.Profile, pluginAllowKey(cmd), pkgs); err != nil {
-		return "", fmt.Errorf("%s\n（自动配置 allowBuilds 失败: %s）", runErr.Error(), err)
-	}
-	LogWarning("构建脚本被拦截 [%s]，已自动放行并重新执行: %s", strings.Join(pkgs, ", "), cmd.display())
-	if runErr = runPluginSubprocess(cmd.dshArgs()); runErr != nil {
-		return "", runErr
-	}
-	return doneMsg + "（已自动放行构建脚本: " + strings.Join(pkgs, ", ") + "）", nil
+	// 所有重试均未成功，提炼友好中文报错
+	return "", fmt.Errorf("%s", FormatPnpmFailureMessage(runErr.Error()))
 }
 
 func launchPluginOp(cmd *pluginCommand, doneMsg string) {
 	LogInfo("开始执行插件管理操作: verb=%s, specs=%v, profile=%s", cmd.Verb, cmd.Specs, cmd.Profile)
 	go func() {
-		// 安装/更新前快照 package.json，防止失败产生幽灵依赖
-		var manifestSnapshot []byte
-		if cmd.Verb == pluginAdd || cmd.Verb == pluginUpdate || cmd.Verb == pluginInstall {
-			manifestSnapshot = snapshotManifest()
-		}
-
-		msg, runErr := runPluginOpWithAutoAllow(cmd, doneMsg)
-		if runErr != nil {
-			LogWarning("插件执行失败: %s", shortPluginFailReason(runErr))
-			if manifestSnapshot != nil {
-				rollbackManifest(manifestSnapshot)
-			}
-			setPluginDone(false, runErr.Error())
-			return
-		}
-
-		// 安装成功后进行入口文件完整性校验（防假成功）
-		if cmd.Verb == pluginAdd || cmd.Verb == pluginUpdate {
+		// 更新前记录旧版本号（用于后续陈旧性比对）
+		beforeVersions := make(map[string]string)
+		if cmd.Verb == pluginUpdate {
 			for _, spec := range cmd.Specs {
-				if err := verifyInstalledPluginEntry(spec); err != nil {
-					LogWarning("插件产物校验失败: %s", err)
-					if manifestSnapshot != nil {
-						rollbackManifest(manifestSnapshot)
-					}
-					setPluginDone(false, err.Error())
-					return
+				name := normalizePluginKey(spec)
+				if meta, ok := installedPluginMetadata(name); ok {
+					beforeVersions[name] = meta.Version
 				}
 			}
 		}
 
-		// 卸载成功后清理残留（cordis.patch.yml 用户补丁行、allowBuilds 与故障标记）
+		msg, runErr := runPluginOpWithRecovery(cmd, doneMsg)
+		if runErr != nil {
+			LogWarning("插件执行失败: %s", shortPluginFailReason(runErr))
+			setPluginDone(false, runErr.Error())
+			return
+		}
+
+		// 针对更新操作进行精准陈旧性比对 (Stale Update Detection)
+		if cmd.Verb == pluginUpdate && len(cmd.Specs) > 0 {
+			var updatedDetails []string
+			hasAnyUpgrade := false
+			for _, spec := range cmd.Specs {
+				name := normalizePluginKey(spec)
+				oldVer := beforeVersions[name]
+				newMeta, found := installedPluginMetadata(name)
+				if found && oldVer != "" {
+					if CompareSemver(newMeta.Version, oldVer) > 0 {
+						hasAnyUpgrade = true
+						updatedDetails = append(updatedDetails, fmt.Sprintf("%s: v%s -> v%s", name, oldVer, newMeta.Version))
+					} else if newMeta.Version == oldVer {
+						updatedDetails = append(updatedDetails, fmt.Sprintf("%s: 当前已是最新版本 (v%s)", name, newMeta.Version))
+					} else {
+						hasAnyUpgrade = true
+						updatedDetails = append(updatedDetails, fmt.Sprintf("%s: v%s", name, newMeta.Version))
+					}
+				}
+			}
+			if !hasAnyUpgrade && len(updatedDetails) > 0 {
+				msg = strings.Join(updatedDetails, "；") + "，远端无新发布版本"
+			} else if len(updatedDetails) > 0 {
+				msg = "更新完成（" + strings.Join(updatedDetails, "；") + "），重启服务后生效"
+			}
+		}
+
+		// 卸载成功后清理残留（cordis.patch.yml 用户补丁行与 allowBuilds）
 		if cmd.Verb == pluginRemove {
 			for _, spec := range cmd.Specs {
-				ClearPluginFailure(spec)
 				_ = RemovePluginFromProfileUserPatch(cmd.Profile, spec)
 			}
 			if pluginAllowKey(cmd) != "" {
@@ -893,7 +995,7 @@ func validatePluginExecution(cmd *pluginCommand) error {
 // pluginPreviewError 输入框实时解析校验（输入框限制仅支持 add，并复用底层业务校验）
 func pluginPreviewError(cmd *pluginCommand) string {
 	if cmd.Verb != pluginAdd {
-		return "输入框仅支持安装（add）。更新/卸载请在下方已安装插件列表中操作"
+		return "仅支持添加插件指令 (add)"
 	}
 	if err := validatePluginExecution(cmd); err != nil {
 		return err.Error()
@@ -1001,29 +1103,10 @@ func handlePluginToggle(c *gin.Context) {
 		return
 	}
 
-	// 若禁用了故障插件，清除该插件的崩溃报错记录
-	if disabled {
-		ClearPluginFailure(req.Name)
-	}
-
 	action := "已启用"
 	if disabled {
 		action = "已禁用"
 	}
 	msg := fmt.Sprintf("%s插件「%s」", action, req.Name)
 	OKMsg(c, msg, gin.H{"name": req.Name, "enabled": req.Enabled})
-}
-
-// handlePluginDisableAllBroken 一键禁用所有异常插件（自愈恢复）
-func handlePluginDisableAllBroken(c *gin.Context) {
-	disabled, err := DisableAllBrokenPlugins("web")
-	if err != nil {
-		Fail(c, http.StatusInternalServerError, "禁用异常插件失败: "+err.Error())
-		return
-	}
-	if len(disabled) == 0 {
-		OKMsg(c, "当前没有需要禁用的异常插件", gin.H{"disabled": []string{}})
-		return
-	}
-	OKMsg(c, fmt.Sprintf("已成功禁用 %d 个异常插件并生效", len(disabled)), gin.H{"disabled": disabled})
 }

@@ -18,12 +18,31 @@
               <component :is="showInstallPanel ? ChevronUp : Plus" />
             </n-icon>
           </template>
-          <span>{{ showInstallPanel ? '收起' : '安装' }}</span>
+          <span>{{ showInstallPanel ? '收起' : '安装插件' }}</span>
         </n-button>
       </div>
     </div>
 
-    <!-- 配置变更重启提醒横幅（复用标准置顶告警横幅风格） -->
+    <!-- 插件操作执行中提示横幅 -->
+    <div v-if="busy" v-auto-animate class="w-full min-w-0">
+      <n-alert type="info" :show-icon="true"
+        class="rounded-2xl shadow-xs border border-blue-200 dark:border-blue-900/40">
+        <div class="flex items-center justify-between gap-3 min-w-0">
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            <n-spin :size="14" class="shrink-0" />
+            <span class="text-xs text-blue-800 dark:text-blue-200 font-medium truncate">
+              正在执行插件任务（安装 / 卸载 / 更新），请稍候…
+            </span>
+          </div>
+          <n-button type="error" size="tiny" secondary @click="handleCancel"
+            class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
+            终止操作
+          </n-button>
+        </div>
+      </n-alert>
+    </div>
+
+    <!-- 配置变更重启提醒横幅 -->
     <div v-if="isRunning && needRestart" v-auto-animate class="w-full min-w-0">
       <n-alert type="warning" title="插件配置已变更" :show-icon="true"
         class="rounded-2xl shadow-xs border border-amber-200 dark:border-amber-900/40">
@@ -31,65 +50,43 @@
           <p class="text-xs text-amber-800 dark:text-amber-200 min-w-0 flex-1">
             检测到插件安装或配置更新，为了使改动完全生效，建议重启服务。
           </p>
-          <n-popconfirm @positive-click="onConfirmRestart" positive-text="确认重启" negative-text="取消">
-            <template #trigger>
-              <n-button type="warning" size="tiny" secondary :loading="isRestarting"
-                :disabled="isActionLocked && !isRestarting"
-                class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
-                重启服务
-              </n-button>
-            </template>
-            重启服务将短暂中断当前对话连接，确认立即重启吗？
-          </n-popconfirm>
+          <n-button type="warning" size="tiny" secondary :loading="isRestarting"
+            :disabled="isActionLocked && !isRestarting" @click="promptRestartService"
+            class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
+            重启服务
+          </n-button>
         </div>
       </n-alert>
     </div>
 
-    <!-- 故障诊断告警横幅（当存在加载失败/崩溃插件时置顶展示） -->
-    <div v-if="hasBrokenPlugin" v-auto-animate class="w-full min-w-0">
-      <n-alert type="error" title="检测到插件加载异常" :show-icon="true"
-        class="rounded-2xl shadow-xs border border-red-200 dark:border-red-900/40">
-        <div class="space-y-2 mt-1 min-w-0">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <p class="text-xs text-red-700 dark:text-red-300 min-w-0 flex-1">
-              以下插件在服务启动加载阶段发生错误，可能导致宿主服务无法正常启动或功能受损：
-            </p>
-            <n-button v-if="brokenPlugins.length > 1" size="tiny" type="error" secondary @click="handleDisableAllBroken"
-              :disabled="busy"
-              class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
-              一键禁用所有异常
-            </n-button>
+    <!-- dshmarket 市场插件推荐引导卡片（未安装时展示） -->
+    <div v-if="!hasDshMarketInstalled" v-auto-animate class="w-full min-w-0">
+      <div
+        class="p-3 sm:p-4 rounded-2xl bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-purple-50/80 dark:from-blue-950/30 dark:via-indigo-950/20 dark:to-purple-950/30 border border-blue-100/80 dark:border-blue-900/30 shadow-xs flex items-center justify-between gap-2.5 sm:gap-3.5 min-w-0">
+        <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+          <div
+            class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-fnos-blue/10 dark:bg-fnos-blue/20 text-fnos-blue dark:text-blue-400 flex items-center justify-center shrink-0">
+            <n-icon :size="18">
+              <BuildingStore />
+            </n-icon>
           </div>
-          <div class="divide-y divide-red-100 dark:divide-red-900/30">
-            <div v-for="bp in brokenPlugins" :key="bp.name" class="py-2.5 space-y-1.5 min-w-0">
-              <!-- 首行：左侧插件名+状态Tag 与 右侧禁用自愈按钮 严格同行排布 -->
-              <div class="flex items-center justify-between gap-2 w-full min-w-0">
-                <div class="flex items-center gap-2 min-w-0 flex-1 truncate">
-                  <n-ellipsis :line-clamp="1" :tooltip="!isTouch"
-                    class="font-bold text-xs text-red-800 dark:text-red-200 font-mono shrink truncate">
-                    {{ bp.name }}
-                  </n-ellipsis>
-                  <n-tag size="tiny" type="error" round :bordered="false" class="shrink-0 font-medium text-[10px]">
-                    加载失败
-                  </n-tag>
-                </div>
-                <n-button size="tiny" type="error" secondary @click="handleDisableBroken(bp.name)" :disabled="busy"
-                  class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
-                  禁用
-                </n-button>
-              </div>
-
-              <!-- 下方：报错详情日志 -->
-              <div v-if="bp.errorReason"
-                class="text-[11px] text-red-600 dark:text-red-400 font-mono min-w-0 leading-relaxed bg-red-100/40 dark:bg-red-950/40 p-2 rounded-xl border border-red-200/50 dark:border-red-900/30">
-                <n-ellipsis :line-clamp="2" :tooltip="!isTouch" class="w-full break-all">
-                  {{ bp.errorReason }}
-                </n-ellipsis>
-              </div>
-            </div>
+          <div class="min-w-0 flex-1 space-y-0.5">
+            <h3 class="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100 truncate">推荐安装「dshmarket」插件市场</h3>
+            <p class="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 leading-normal line-clamp-1 sm:line-clamp-none">
+              第三方插件市场，安装后可在DSH设置中直接可视化浏览、搜索与管理社区插件及主题。
+            </p>
           </div>
         </div>
-      </n-alert>
+        <n-button type="primary" size="small" secondary @click="handleQuickInstallMarket" :disabled="busy"
+          class="shrink-0 rounded-lg !h-7 sm:!h-7.5 !px-2.5 sm:!px-3 text-xs font-medium transition-transform duration-150 active:scale-95">
+          <template #icon>
+            <n-icon :size="13">
+              <Download />
+            </n-icon>
+          </template>
+          <span>安装</span>
+        </n-button>
+      </div>
     </div>
 
     <!-- 安装插件平滑展开卡片（聚焦标准指令与包名输入） -->
@@ -133,7 +130,7 @@
               <span class="truncate min-w-0 flex-1">支持: npm 包、@scoped 包、github:user/repo</span>
               <a href="javascript:void(0)" @click="openMarketplace"
                 class="text-fnos-blue dark:text-blue-400 hover:underline inline-flex items-center gap-0.5 shrink-0 select-none font-medium cursor-pointer">
-                <span>浏览插件市场</span>
+                <span>插件精选列表</span>
                 <n-icon :size="12">
                   <ExternalLink />
                 </n-icon>
@@ -170,13 +167,10 @@
               <n-radio-button value="disabled" class="!h-8 !leading-8 text-xs">
                 已停用 <span class="text-[11px] opacity-75 font-mono ml-0.5">({{ disabledCount }})</span>
               </n-radio-button>
-              <n-radio-button v-if="brokenCount > 0" value="broken" class="!h-8 !leading-8 text-xs">
-                异常 <span class="text-[11px] opacity-75 font-mono ml-0.5">({{ brokenCount }})</span>
-              </n-radio-button>
             </n-radio-group>
           </div>
 
-          <!-- 右侧：搜索框与刷新按钮（自适应宽度，严防挤出容器） -->
+          <!-- 右侧：搜索框与刷新按钮 -->
           <div class="flex items-center gap-2 w-full md:w-72 min-w-0 max-w-full">
             <div class="flex-1 min-w-0">
               <n-input v-model:value="searchKeyword" placeholder="搜索插件名 / 描述 / 作者..." size="small" clearable
@@ -238,7 +232,7 @@
             <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3 sm:gap-4 w-full min-w-0">
               <!-- 左侧：图标 + 详细信息主体 -->
               <div class="flex items-start gap-0 sm:gap-3.5 min-w-0 flex-1">
-                <!-- 插件状态代表图标（移动端隐藏以节省水平空间，桌面端展示） -->
+                <!-- 插件状态代表图标 -->
                 <div
                   class="hidden sm:flex w-9 h-9 rounded-xl items-center justify-center shrink-0 mt-0.5 transition-transform duration-200 group-hover:scale-105"
                   :class="getPluginIconBg(p.state)">
@@ -247,9 +241,9 @@
                   </n-icon>
                 </div>
 
-                <!-- 插件文本详情（从左往右依次计算排布，汇总溢出时按需动态截断） -->
+                <!-- 插件文本详情 -->
                 <div class="flex-1 min-w-0 space-y-1 overflow-hidden">
-                  <!-- 第一行：标题 + 版本号 + 状态 Tag + 保护 Tag（从左往右依次紧贴排布，总宽溢出时标题自然截断） -->
+                  <!-- 第一行：标题 + 版本号 + 状态 Tag + 保护 Tag -->
                   <div class="flex items-center flex-nowrap gap-2 w-full min-w-0 h-6 overflow-hidden">
                     <div class="min-w-0 shrink truncate flex items-center">
                       <n-ellipsis :line-clamp="1" :tooltip="!isTouch"
@@ -276,7 +270,7 @@
                     </n-tag>
                   </div>
 
-                  <!-- 第二行：功能描述（自然展示，超出整行可用空间时截断） -->
+                  <!-- 第二行：功能描述 -->
                   <div v-if="p.description"
                     class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed min-w-0 w-full truncate">
                     <n-ellipsis :line-clamp="1" :tooltip="!isTouch" class="truncate w-full block">
@@ -284,7 +278,7 @@
                     </n-ellipsis>
                   </div>
 
-                  <!-- 第三行：元数据信息工整排版（从左往右依次自然紧贴，汇总超出时来源动态截断） -->
+                  <!-- 第三行：元数据信息工整排版 -->
                   <div
                     class="flex items-center flex-nowrap gap-x-2 text-[11px] text-slate-400 dark:text-slate-500 font-mono min-w-0 w-full pt-0.5 overflow-hidden whitespace-nowrap">
                     <span v-if="p.author" class="inline-flex items-center min-w-0 shrink-0 truncate">
@@ -295,7 +289,7 @@
                     <span v-if="p.author && p.spec"
                       class="text-slate-300 dark:text-slate-700 select-none shrink-0">•</span>
 
-                    <!-- 来源：从左往右自然紧随，仅在整行汇总溢出时作为可收缩项动态截断 -->
+                    <!-- 来源 -->
                     <span v-if="p.spec" class="inline-flex items-center min-w-0 shrink truncate">
                       <span class="text-slate-300 dark:text-slate-600 mr-1 shrink-0">来源:</span>
                       <n-ellipsis :line-clamp="1" :tooltip="!isTouch" class="truncate">{{ p.spec }}</n-ellipsis>
@@ -312,37 +306,25 @@
                       </n-icon>
                     </a>
                   </div>
-
-                  <!-- 故障报错展开框（整行超出时动态截断） -->
-                  <div v-if="p.state === 'broken' && p.errorReason"
-                    class="mt-2 p-2 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900/40 text-xs text-red-600 dark:text-red-400 font-mono min-w-0 w-full truncate">
-                    <n-ellipsis :line-clamp="1" :tooltip="!isTouch" class="w-full truncate block">
-                      报错原因: {{ p.errorReason }}
-                    </n-ellipsis>
-                  </div>
                 </div>
               </div>
 
-              <!-- 右侧操作区：卸载 -> 更新 -> Switch 开关（全端完整显示文字，按钮尺寸舒适饱满） -->
+              <!-- 右侧操作区：卸载 -> 更新 -> Switch 开关 -->
               <div
                 class="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-2.5 sm:pt-0 border-t sm:border-t-0 border-slate-50 dark:border-white/[0.04] w-full sm:w-auto sm:h-6">
                 <!-- 左侧按钮组（卸载与更新） -->
                 <div class="flex items-center gap-2 shrink-0">
                   <!-- 1. 卸载按钮 -->
-                  <n-popconfirm @positive-click="onConfirmUninstall(p.name)" positive-text="确认卸载" negative-text="取消">
-                    <template #trigger>
-                      <n-button size="small" secondary type="error" :disabled="busy || p.isProtected"
-                        class="!h-7 !px-2.5 rounded-lg text-xs font-medium transition-transform duration-150 active:scale-95 shrink-0">
-                        <template #icon>
-                          <n-icon>
-                            <Trash />
-                          </n-icon>
-                        </template>
-                        <span>卸载</span>
-                      </n-button>
+                  <n-button size="small" secondary type="error" :disabled="busy || p.isProtected"
+                    @click="promptUninstallPlugin(p.name)"
+                    class="!h-7 !px-2.5 rounded-lg text-xs font-medium transition-transform duration-150 active:scale-95 shrink-0">
+                    <template #icon>
+                      <n-icon>
+                        <Trash />
+                      </n-icon>
                     </template>
-                    确定要卸载插件「{{ p.name }}」吗？
-                  </n-popconfirm>
+                    <span>卸载</span>
+                  </n-button>
 
                   <!-- 2. 更新按钮 -->
                   <n-tooltip trigger="hover" :disabled="isTouch">
@@ -361,7 +343,7 @@
                   </n-tooltip>
                 </div>
 
-                <!-- 3. Switch 开关 -->
+                <!-- 3. Switch 开关（基于 cordis.patch.yml 1秒无感热启停） -->
                 <n-tooltip trigger="hover" :disabled="!p.isProtected || isTouch">
                   <template #trigger>
                     <div class="flex items-center gap-2 shrink-0">
@@ -397,12 +379,12 @@ import {
   NSwitch,
   NTag,
   NIcon,
-  NPopconfirm,
   NRadioGroup,
   NRadioButton,
   NTooltip,
   NEllipsis,
-  useMessage
+  useMessage,
+  useDialog
 } from 'naive-ui'
 import {
   Plus,
@@ -412,7 +394,9 @@ import {
   Puzzle,
   ExternalLink,
   Search,
-  ChevronUp
+  ChevronUp,
+  BuildingStore,
+  Download
 } from '@vicons/tabler'
 import { usePluginStore } from '../stores/plugin'
 import { useSystemStore } from '../stores/system'
@@ -423,11 +407,12 @@ import type { PluginState } from '../types/api'
 const pluginStore = usePluginStore()
 const systemStore = useSystemStore()
 const message = useMessage()
+const dialog = useDialog()
 
 // 控制安装面板的展开与收起
 const showInstallPanel = ref(false)
 
-// 触摸设备判定，避免移动端触摸冲突
+// 触摸设备判定
 const isTouch = ref(typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0))
 
 const openMarketplace = () => {
@@ -446,9 +431,6 @@ const {
   canInstall,
   liveCount,
   disabledCount,
-  brokenCount,
-  brokenPlugins,
-  hasBrokenPlugin,
   filteredPlugins
 } = storeToRefs(pluginStore)
 
@@ -460,12 +442,21 @@ const {
 
 const isRestarting = computed(() => activeAction.value === 'restart')
 
-const getStateTagType = (state: PluginState): 'success' | 'default' | 'warning' | 'error' => {
+// 判定用户是否已经安装了 dshmarket
+const hasDshMarketInstalled = computed(() => {
+  return plugins.value.some(p => p.name === 'dshmarket' || p.name === 'dsh-market')
+})
+
+const handleQuickInstallMarket = () => {
+  pluginStore.fillDshMarketCommand()
+  showInstallPanel.value = true
+}
+
+const getStateTagType = (state: PluginState): 'success' | 'default' | 'warning' => {
   switch (state) {
     case 'live': return 'success'
     case 'disabled': return 'default'
     case 'inert': return 'warning'
-    case 'broken': return 'error'
   }
 }
 
@@ -473,15 +464,13 @@ const getStateTagLabel = (state: PluginState): string => {
   switch (state) {
     case 'live': return '运行中'
     case 'disabled': return '已停用'
-    case 'inert': return '未声明层'
-    case 'broken': return '加载异常'
+    case 'inert': return '普通依赖'
   }
 }
 
 const getPluginIconBg = (state: PluginState): string => {
   switch (state) {
     case 'live': return 'bg-emerald-50 dark:bg-emerald-950/40'
-    case 'broken': return 'bg-red-50 dark:bg-red-950/40'
     case 'inert': return 'bg-amber-50 dark:bg-amber-950/40'
     default: return 'bg-slate-100 dark:bg-white/[0.06]'
   }
@@ -490,7 +479,6 @@ const getPluginIconBg = (state: PluginState): string => {
 const getPluginIconColor = (state: PluginState): string => {
   switch (state) {
     case 'live': return 'text-emerald-600 dark:text-emerald-400'
-    case 'broken': return 'text-red-600 dark:text-red-400'
     case 'inert': return 'text-amber-600 dark:text-amber-400'
     default: return 'text-slate-400 dark:text-slate-500'
   }
@@ -542,24 +530,6 @@ const handleToggle = withAsyncLock(async (name: string, enabled: boolean) => {
   }
 })
 
-const handleDisableBroken = withAsyncLock(async (name: string) => {
-  const res = await pluginStore.togglePlugin(name, false)
-  if (res.success) {
-    message.success(`已禁用异常插件「${name}」，补丁已生效`)
-  } else {
-    message.error(res.message || '操作失败')
-  }
-})
-
-const handleDisableAllBroken = withAsyncLock(async () => {
-  const res = await pluginStore.disableAllBroken()
-  if (res.success) {
-    message.success(res.message || '已成功禁用所有异常插件')
-  } else {
-    message.error(res.message || '禁用失败')
-  }
-})
-
 const handleUpdate = withAsyncLock(async (name: string) => {
   const res = await pluginStore.updatePlugin(name)
   if (res.success) {
@@ -578,15 +548,30 @@ const handleUninstall = withAsyncLock(async (name: string) => {
   }
 })
 
-// Popconfirm 确认回调
-const onConfirmRestart = () => {
-  void handleRestartService()
-  return true
+// 重启服务确认弹窗 (全局模态)
+function promptRestartService() {
+  dialog.warning({
+    title: '确认立即重启服务？',
+    content: '检测到插件配置已更新，为了使改动完全生效需要重启服务。重启将短暂中断当前所有 AI 对话连接，是否确认继续？',
+    positiveText: '确认重启',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void handleRestartService()
+    }
+  })
 }
 
-const onConfirmUninstall = (name: string) => {
-  void handleUninstall(name)
-  return true
+// 卸载插件确认弹窗 (全局模态)
+function promptUninstallPlugin(name: string) {
+  dialog.warning({
+    title: '确认卸载插件？',
+    content: `确定要卸载插件「${name}」吗？卸载后将自动清理相关的运行时依赖与配置补丁。`,
+    positiveText: '确认卸载',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void handleUninstall(name)
+    }
+  })
 }
 
 onMounted(() => {

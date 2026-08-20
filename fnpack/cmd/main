@@ -12,6 +12,7 @@ else
 fi
 
 export DATA_LIBRARY_PATH="${DATA_LIBRARY_PATH}"
+export DSH_RUN_USER="${wizard_dsh_run_user:-root}"
 
 CMD="${TRIM_APPDEST}/bin/deepseek.harness"
 

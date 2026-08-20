@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -275,6 +275,15 @@ func RemovePluginFromProfileUserPatch(profile, packageName string, entryIDs ...s
 	return WriteProfileUserPatch(profile, newRows)
 }
 
+// ResetAllProfilePatches 清空 Profile 目录与插件白名单缓存，由主程序按模板重新初始化
+func ResetAllProfilePatches() {
+	patchFileMu.Lock()
+	defer patchFileMu.Unlock()
+
+	_ = safeRemoveAll(filepath.Join(pkgVarDir, "dsh-data", "profiles"))
+	_ = safeRemoveAll(filepath.Join(pkgVarDir, "plugins"))
+}
+
 var (
 	blockedBuildsRe = regexp.MustCompile(`(?i)Ignored build scripts:\s*(.+)`)
 	pkgNameRe       = regexp.MustCompile(`^(@?[a-zA-Z0-9][\w.-]*(?:/[@a-zA-Z0-9][\w.-]*)?)@[0-9]`)
@@ -497,147 +506,264 @@ func cleanupAllowBuildsFor(profile, pluginKey string) error {
 	return writeAllowBuildsSidecar(sidecar)
 }
 
-type PluginFailureInfo struct {
-	Target    string    `json:"target"`
-	EntryID   string    `json:"entryId,omitempty"`
-	Reason    string    `json:"reason"`
-	Timestamp time.Time `json:"timestamp"`
+// PnpmFailureCode pnpm 故障分类类型
+type PnpmFailureCode string
+
+const (
+	PnpmFailureHoistPatternDiff PnpmFailureCode = "hoist-pattern-diff"
+	PnpmFailureReleaseAge       PnpmFailureCode = "release-age-violation"
+	PnpmFailureFetchTimeout     PnpmFailureCode = "fetch-timeout"
+	PnpmFailureTransientNetwork PnpmFailureCode = "transient-network"
+	PnpmFailureIgnoredBuilds    PnpmFailureCode = "ignored-builds"
+	PnpmFailureGitDepPrepare    PnpmFailureCode = "git-prepare-not-allowed"
+	PnpmFailureFetch404         PnpmFailureCode = "fetch-404"
+	PnpmFailureAddingToRoot     PnpmFailureCode = "adding-to-root"
+	PnpmFailureUnexpectedStore  PnpmFailureCode = "unexpected-store"
+	PnpmFailureUnknown          PnpmFailureCode = "unknown"
+)
+
+// PnpmFailureInfo 识别出的故障详情
+type PnpmFailureInfo struct {
+	Code        PnpmFailureCode
+	Recoverable bool
+	Message     string
+	DetailPkg   string
 }
 
 var (
-	diagMu                  sync.RWMutex
-	failedPlugins           = make(map[string]PluginFailureInfo)
-	lastLineWasFailedToLoad bool
+	re404Pkg       = regexp.MustCompile(`(?:GET|fetch)\s+\S*\/([^/\s:]+)(?::|\s)`)
+	reTransientNet = regexp.MustCompile(`(?i)(?:ERR_PNPM_FETCH_5\d\d|ERR_PNPM_META_FETCH_FAIL|FetchError|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|socket hang up|network timeout)`)
+	reFetchTimeout = regexp.MustCompile(`(?i)(?:operation was aborted due to timeout|TimeoutError|error \(23\))`)
+	semverPattern  = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$`)
 )
 
-var (
-	loaderEntryErrRe    = regexp.MustCompile(`(?i)failed to apply loader entry\s*([0-9a-fA-F_-]+)?\s*(?:\(([^)]+)\))?:\s*(.+)`)
-	genericPluginErrRe  = regexp.MustCompile(`(?i)(?:plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?\s+failed|failed to load plugin\s+['"]?([@a-zA-Z0-9/._-]+)['"]?):\s*(.+)`)
-	pkgNamePatternRe    = regexp.MustCompile(`^[@a-zA-Z0-9/._-]+$`)
-	servicePendingErrRe = regexp.MustCompile(`(?i)([@a-zA-Z0-9/._-]+):\s*pending\s*\(waiting for service:\s*([^)]+)\)`)
-)
-
-func RecordPluginFailureRecord(pkgName, entryID, reason string) {
-	pkgName = strings.TrimSpace(pkgName)
-	entryID = strings.TrimSpace(entryID)
-	reason = strings.TrimSpace(reason)
-
-	if pkgName == "" && entryID == "" {
-		return
+// ClassifyPnpmFailure 智能分类 pnpm 执行失败原因
+func ClassifyPnpmFailure(output string) PnpmFailureInfo {
+	if strings.Contains(output, "ERR_PNPM_PUBLIC_HOIST_PATTERN_DIFF") {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureHoistPatternDiff,
+			Recoverable: true,
+			Message:     "node_modules 是旧版 pnpm 创建的，存在依赖结构差异，已自动重建后重试",
+		}
 	}
 
-	diagMu.Lock()
-	defer diagMu.Unlock()
-
-	key := pkgName
-	if key == "" {
-		key = entryID
+	if strings.Contains(output, "ERR_PNPM_UNEXPECTED_STORE") {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureUnexpectedStore,
+			Recoverable: true,
+			Message:     "依赖存储位置变更，已自动清理缓存并重试",
+		}
 	}
 
-	failedPlugins[key] = PluginFailureInfo{
-		Target:    pkgName,
-		EntryID:   entryID,
-		Reason:    reason,
-		Timestamp: time.Now(),
+	if strings.Contains(output, "ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION") ||
+		strings.Contains(output, "ERR_PNPM_NO_MATURE_MATCHING_VERSION") {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureReleaseAge,
+			Recoverable: true,
+			Message:     "检测到刚发布的新版本受 pnpm 安全期限制，已自动放行并重试",
+		}
 	}
-	LogWarning("[插件故障捕获] 成功捕获插件崩溃: %s (Entry: %s) -> %s", pkgName, entryID, reason)
+
+	if reFetchTimeout.MatchString(output) {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureFetchTimeout,
+			Recoverable: true,
+			Message:     "下载耗时超出默认限制，已自动延长超时时间并重试",
+		}
+	}
+
+	if strings.Contains(output, "ERR_PNPM_IGNORED_BUILDS") {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureIgnoredBuilds,
+			Recoverable: true,
+			Message:     "依赖包含构建脚本，已被 pnpm 默认拦截，已自动配置放行并重试",
+		}
+	}
+
+	if strings.Contains(output, "ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED") {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureGitDepPrepare,
+			Recoverable: true,
+			Message:     "Git 插件包含构建脚本，已自动配置放行并重试",
+		}
+	}
+
+	if strings.Contains(output, "ERR_PNPM_FETCH_404") {
+		detailPkg := ""
+		if m := re404Pkg.FindStringSubmatch(output); len(m) > 1 {
+			detailPkg = strings.ReplaceAll(m[1], "%2F", "/")
+			detailPkg = strings.ReplaceAll(detailPkg, "%2f", "/")
+		}
+		msg := "指定的插件包在 npm 镜像源上不存在 (404)"
+		if detailPkg != "" {
+			msg = fmt.Sprintf("依赖包「%s」在镜像源上不存在 (404)，可能未发布或存在历史残留", detailPkg)
+		}
+		return PnpmFailureInfo{
+			Code:        PnpmFailureFetch404,
+			Recoverable: false,
+			Message:     msg,
+			DetailPkg:   detailPkg,
+		}
+	}
+
+	if reTransientNet.MatchString(output) {
+		return PnpmFailureInfo{
+			Code:        PnpmFailureTransientNetwork,
+			Recoverable: true,
+			Message:     "网络连接瞬态抖动，已自动重试",
+		}
+	}
+
+	return PnpmFailureInfo{
+		Code:        PnpmFailureUnknown,
+		Recoverable: false,
+		Message:     "插件指令执行失败",
+	}
 }
 
-func ClearPluginFailure(pkgName string) {
-	diagMu.Lock()
-	defer diagMu.Unlock()
-	delete(failedPlugins, pkgName)
-}
-
-func ClearAllPluginFailures() {
-	diagMu.Lock()
-	defer diagMu.Unlock()
-	lastLineWasFailedToLoad = false
-	if len(failedPlugins) > 0 {
-		failedPlugins = make(map[string]PluginFailureInfo)
-	}
-}
-
-func GetFailedPlugins() map[string]PluginFailureInfo {
-	diagMu.RLock()
-	defer diagMu.RUnlock()
-	res := make(map[string]PluginFailureInfo, len(failedPlugins))
-	for k, v := range failedPlugins {
-		res[k] = v
-	}
-	return res
-}
-
-func DisableAllBrokenPlugins(profile string) ([]string, error) {
-	failed := GetFailedPlugins()
-	if len(failed) == 0 {
-		return nil, nil
+// FormatPnpmFailureMessage 将底层复杂的报错提炼为精炼的中文反馈
+func FormatPnpmFailureMessage(output string) string {
+	info := ClassifyPnpmFailure(output)
+	if info.Code == PnpmFailureFetch404 {
+		return info.Message
 	}
 
-	var disabledNames []string
-	for name := range failed {
-		if IsProtectedPlugin(name) {
+	// 提取最具参考价值的单行错误
+	lines := strings.Split(output, "\n")
+	var meaningfulLines []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
 			continue
 		}
-		if err := SetPluginDisabled(profile, name, true); err != nil {
-			LogWarning("[一键自愈] 禁用故障插件 %s 失败: %s", name, err)
+		if strings.HasPrefix(trimmed, "ERR_PNPM_") ||
+			strings.HasPrefix(trimmed, "npm ERR!") ||
+			strings.HasPrefix(trimmed, "error:") ||
+			strings.Contains(trimmed, "Error:") {
+			meaningfulLines = append(meaningfulLines, trimmed)
+		}
+	}
+
+	if len(meaningfulLines) > 0 {
+		return fmt.Sprintf("%s（%s）", info.Message, meaningfulLines[0])
+	}
+
+	// 兜底截取最后一段有效文字
+	for i := len(lines) - 1; i >= 0; i-- {
+		t := strings.TrimSpace(lines[i])
+		if t != "" && !strings.HasPrefix(t, "at ") {
+			if len(t) > 120 {
+				t = t[:120] + "…"
+			}
+			return fmt.Sprintf("%s: %s", info.Message, t)
+		}
+	}
+	return info.Message
+}
+
+// parsedSemver 结构化 Semver
+type parsedSemver struct {
+	Major int
+	Minor int
+	Patch int
+	Pre   []string
+}
+
+func parseSemver(v string) (parsedSemver, bool) {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	v = strings.TrimPrefix(v, "^")
+	v = strings.TrimPrefix(v, "~")
+
+	m := semverPattern.FindStringSubmatch(v)
+	if len(m) == 0 {
+		return parsedSemver{}, false
+	}
+	maj, _ := strconv.Atoi(m[1])
+	min, _ := strconv.Atoi(m[2])
+	pat, _ := strconv.Atoi(m[3])
+
+	var pre []string
+	if m[4] != "" {
+		pre = strings.Split(m[4], ".")
+	}
+	return parsedSemver{Major: maj, Minor: min, Patch: pat, Pre: pre}, true
+}
+
+// CompareSemver 严格语义化版本比较: v1 > v2 返回 1; v1 < v2 返回 -1; 相等返回 0
+func CompareSemver(v1, v2 string) int {
+	p1, ok1 := parseSemver(v1)
+	p2, ok2 := parseSemver(v2)
+	if !ok1 || !ok2 {
+		if v1 == v2 {
+			return 0
+		}
+		return strings.Compare(v1, v2)
+	}
+
+	if p1.Major != p2.Major {
+		if p1.Major > p2.Major {
+			return 1
+		}
+		return -1
+	}
+	if p1.Minor != p2.Minor {
+		if p1.Minor > p2.Minor {
+			return 1
+		}
+		return -1
+	}
+	if p1.Patch != p2.Patch {
+		if p1.Patch > p2.Patch {
+			return 1
+		}
+		return -1
+	}
+
+	// 正式版本优于预览版
+	if len(p1.Pre) == 0 && len(p2.Pre) > 0 {
+		return 1
+	}
+	if len(p1.Pre) > 0 && len(p2.Pre) == 0 {
+		return -1
+	}
+	if len(p1.Pre) == 0 && len(p2.Pre) == 0 {
+		return 0
+	}
+
+	// 逐段比较 pre-release
+	maxLen := len(p1.Pre)
+	if len(p2.Pre) > maxLen {
+		maxLen = len(p2.Pre)
+	}
+	for i := 0; i < maxLen; i++ {
+		if i >= len(p1.Pre) {
+			return -1
+		}
+		if i >= len(p2.Pre) {
+			return 1
+		}
+		s1 := p1.Pre[i]
+		s2 := p2.Pre[i]
+		if s1 == s2 {
 			continue
 		}
-		ClearPluginFailure(name)
-		disabledNames = append(disabledNames, name)
+		n1, err1 := strconv.Atoi(s1)
+		n2, err2 := strconv.Atoi(s2)
+		if err1 == nil && err2 == nil {
+			if n1 > n2 {
+				return 1
+			}
+			return -1
+		}
+		if err1 == nil && err2 != nil {
+			return -1
+		}
+		if err1 != nil && err2 == nil {
+			return 1
+		}
+		return strings.Compare(s1, s2)
 	}
-
-	LogInfo("[一键自愈] 已批量禁用故障插件: %v", disabledNames)
-	return disabledNames, nil
+	return 0
 }
 
-// ParseAndRecordStderrDiagnostics 解析 stderr/stdout 中的插件崩溃信息
-func ParseAndRecordStderrDiagnostics(text string) {
-	clean := strings.TrimSpace(text)
-	if clean == "" {
-		return
-	}
-
-	if m := loaderEntryErrRe.FindStringSubmatch(clean); len(m) >= 4 {
-		entryID := strings.TrimSpace(m[1])
-		pkgName := strings.TrimSpace(m[2])
-		reason := strings.TrimSpace(m[3])
-		if pkgName == "" {
-			pkgName = entryID
-		}
-		RecordPluginFailureRecord(pkgName, entryID, reason)
-		lastLineWasFailedToLoad = false
-		return
-	}
-
-	if m := genericPluginErrRe.FindStringSubmatch(clean); len(m) >= 4 {
-		pkgName := strings.TrimSpace(m[1])
-		if pkgName == "" {
-			pkgName = strings.TrimSpace(m[2])
-		}
-		reason := strings.TrimSpace(m[3])
-		RecordPluginFailureRecord(pkgName, "", reason)
-		lastLineWasFailedToLoad = false
-		return
-	}
-
-	if m := servicePendingErrRe.FindStringSubmatch(clean); len(m) >= 3 {
-		target := strings.TrimSpace(m[1])
-		svc := strings.TrimSpace(m[2])
-		RecordPluginFailureRecord(target, "", fmt.Sprintf("服务挂起: 等待 %s 超时 (前置插件崩溃引发连锁中断)", svc))
-		lastLineWasFailedToLoad = false
-		return
-	}
-
-	if strings.EqualFold(clean, "Failed to load plugins") || strings.EqualFold(clean, "Failed to load plugin") {
-		lastLineWasFailedToLoad = true
-		return
-	}
-
-	if lastLineWasFailedToLoad {
-		if pkgNamePatternRe.MatchString(clean) {
-			RecordPluginFailureRecord(clean, "", "启动时加载失败 (Failed to load plugin)")
-		}
-		lastLineWasFailedToLoad = false
-	}
-}

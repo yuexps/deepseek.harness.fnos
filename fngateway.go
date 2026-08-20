@@ -425,7 +425,7 @@ func serveFnGatewayStatusPage(w http.ResponseWriter, r *http.Request, err error)
 
 	currentStatus := state.Status()
 	title := "无法连接到后端服务"
-	desc := "服务响应异常，请检查后台运行状态"
+	desc := "后端服务暂未响应"
 	badgeClass := "badge-err"
 	badgeText := "异常"
 	isStarting := false
@@ -437,19 +437,19 @@ func serveFnGatewayStatusPage(w http.ResponseWriter, r *http.Request, err error)
 	switch currentStatus {
 	case StatusStarting:
 		title = "服务启动中"
-		desc = "正在准备运行环境与初始化依赖，请稍候..."
+		desc = "正在准备运行环境与初始化依赖"
 		badgeClass = "badge-starting"
 		badgeText = "启动中"
 		isStarting = true
 	case StatusBuilding:
 		title = "服务构建中"
-		desc = "正在拉取镜像或构建运行环境，准备就绪后将自动进入"
+		desc = "正在同步依赖与编译运行环境"
 		badgeClass = "badge-starting"
 		badgeText = "构建中"
 		isStarting = true
 	case StatusStopped:
-		title = "服务尚未启动"
-		desc = "底层模型服务当前处于停止状态，请在 DeepSeek Harness 控制面板中启动"
+		title = "服务未运行"
+		desc = "底层模型服务当前处于停止状态"
 		badgeClass = "badge-stopped"
 		badgeText = "已停止"
 	}

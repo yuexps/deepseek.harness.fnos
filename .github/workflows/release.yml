@@ -33,7 +33,6 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          # 清理全部冗余第三方源与慢速镜像配置
           sudo rm -rf /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt
           ARCH=$(dpkg --print-architecture)
           if [ "$ARCH" = "arm64" ]; then
@@ -67,7 +66,6 @@ jobs:
           UPSTREAM_VER=$(node -p "require('./package.json').version")
           echo "$UPSTREAM_VER" > /tmp/version.txt
           echo "Upstream deepseek-harness version: $UPSTREAM_VER"
-          # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
           git sparse-checkout set packages apps vendor native patches scripts website
 
       - name: Get pnpm store directory
@@ -86,11 +84,6 @@ jobs:
 
       - name: Prebuild Upstream Harness (amd64)
         run: |
-          # 打包纯源码包（仅含编译所需全量源码与构建配置，不含 node_modules 与非运行文档）
-          cd /tmp/upstream
-          tar --numeric-owner -czf /tmp/deepseek-harness-source.tar.gz deepseek-harness
-          
-          # 执行完整构建并编译 Landlock 原生沙箱组件
           cd /tmp/upstream/deepseek-harness
           pnpm install --no-frozen-lockfile
           pnpm run build
@@ -98,10 +91,9 @@ jobs:
           pnpm run build:native
           cd ../..
           
-          # 清理构建增量缓存
           find . -name "*.tsbuildinfo" -delete
           
-          # 动态闭包剪枝：从 @deepseek-ai/dsh (apps/cli) 递归分析依赖图，动态清理未被引用的 dev 子包
+          # 动态闭包剪枝：递归分析依赖图，清理未被引用的 dev 模块与冗余子包
           node - <<'NODE'
           const fs = require('fs'), path = require('path')
           function readP(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null } }
@@ -146,7 +138,7 @@ jobs:
             removed++
             console.log('rm unused member:', dir, '[' + name + ']')
           }
-          console.log('wave4: removed ' + removed + ' unused workspace members')
+          console.log('removed ' + removed + ' unused workspace members')
           NODE
           
           # 清理根和保留 member 的 scripts 与 devDependencies
@@ -198,7 +190,6 @@ jobs:
           name: harness-amd64
           path: |
             /tmp/deepseek-harness-amd64.tar.gz
-            /tmp/deepseek-harness-source.tar.gz
             /tmp/version.txt
 
   build-harness-arm64:
@@ -217,7 +208,6 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          # 清理全部冗余第三方源与慢速镜像配置
           sudo rm -rf /etc/apt/sources.list.d/* /etc/apt/sources.list /etc/apt/apt-mirrors.txt
           ARCH=$(dpkg --print-architecture)
           if [ "$ARCH" = "arm64" ]; then
@@ -248,7 +238,6 @@ jobs:
           mkdir -p /tmp/upstream
           git clone --depth=1 https://github.com/deepseek-ai/deepseek-harness.git /tmp/upstream/deepseek-harness
           cd /tmp/upstream/deepseek-harness
-          # 启用 Git 稀疏检出，排除非编译运行时目录（docs、examples、assets、python 等）
           git sparse-checkout set packages apps vendor native patches scripts website
 
       - name: Get pnpm store directory
@@ -267,7 +256,6 @@ jobs:
 
       - name: Prebuild Upstream Harness (arm64)
         run: |
-          # 执行完整构建并编译 Landlock 原生沙箱组件
           cd /tmp/upstream/deepseek-harness
           pnpm install --no-frozen-lockfile
           pnpm run build
@@ -275,10 +263,8 @@ jobs:
           pnpm run build:native
           cd ../..
           
-          # 清理构建增量缓存
           find . -name "*.tsbuildinfo" -delete
           
-          # 动态闭包剪枝：从 @deepseek-ai/dsh (apps/cli) 递归分析依赖图，动态清理未被引用的 dev 子包
           node - <<'NODE'
           const fs = require('fs'), path = require('path')
           function readP(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')) } catch { return null } }
@@ -323,10 +309,9 @@ jobs:
             removed++
             console.log('rm unused member:', dir, '[' + name + ']')
           }
-          console.log('wave4: removed ' + removed + ' unused workspace members')
+          console.log('removed ' + removed + ' unused workspace members')
           NODE
           
-          # 清理根和保留 member 的 scripts 与 devDependencies
           node - <<'NODE'
           const fs = require('fs'), path = require('path')
           {
@@ -355,7 +340,6 @@ jobs:
           for (const root of ['packages', 'apps', 'vendor']) stripMember(root)
           NODE
           
-          # 重装纯生产依赖（仅为核心闭包安装依赖）
           rm -rf node_modules
           CI=true pnpm install --prod \
             --no-frozen-lockfile \
@@ -397,7 +381,7 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Download amd64 and Source Artifacts
+      - name: Download amd64 Artifacts
         uses: actions/download-artifact@v4
         with:
           name: harness-amd64
@@ -425,81 +409,41 @@ jobs:
         run: |
           # 1. x86 预构建版
           (
-            mkdir -p fnpack_x86_prebuilt/app/bin
-            cp -r fnpack/* fnpack_x86_prebuilt/
-            echo "prebuilt" > fnpack_x86_prebuilt/app/.pkg_type
-            cp /tmp/amd64-dist/version.txt fnpack_x86_prebuilt/app/.version
-            cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86_prebuilt/app/deepseek-harness.tar.gz
-            cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86_prebuilt/app/bin/${{ env.BIN_NAME }}
-            cd fnpack_x86_prebuilt
+            mkdir -p fnpack_x86/app/bin
+            cp -r fnpack/* fnpack_x86/
+            cp /tmp/amd64-dist/version.txt fnpack_x86/app/.version
+            cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86/app/bin/${{ env.BIN_NAME }}
+            cd fnpack_x86
             chmod +x ${{ env.FNPACK_BIN }}
             ./${{ env.FNPACK_BIN }} build
             cd ..
-            mv fnpack_x86_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86-prebuilt.fpk
-            rm -rf fnpack_x86_prebuilt
-            echo "x86-prebuilt FPK built successfully."
+            mv fnpack_x86/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86.fpk
+            rm -rf fnpack_x86
+            echo "x86 FPK built successfully."
           ) &
-          PID_X86_PREBUILT=$!
+          PID_X86=$!
 
           # 2. arm 预构建版
           (
-            mkdir -p fnpack_arm_prebuilt/app/bin
-            cp -r fnpack/* fnpack_arm_prebuilt/
-            echo "prebuilt" > fnpack_arm_prebuilt/app/.pkg_type
-            cp /tmp/amd64-dist/version.txt fnpack_arm_prebuilt/app/.version
-            cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm_prebuilt/app/deepseek-harness.tar.gz
-            cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm_prebuilt/app/bin/${{ env.BIN_NAME }}
-            sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_prebuilt/manifest
-            cd fnpack_arm_prebuilt
+            mkdir -p fnpack_arm/app/bin
+            cp -r fnpack/* fnpack_arm/
+            cp /tmp/amd64-dist/version.txt fnpack_arm/app/.version
+            cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm/app/deepseek-harness.tar.gz
+            cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm/app/bin/${{ env.BIN_NAME }}
+            sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm/manifest
+            cd fnpack_arm
             chmod +x ${{ env.FNPACK_BIN }}
             ./${{ env.FNPACK_BIN }} build
             cd ..
-            mv fnpack_arm_prebuilt/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm-prebuilt.fpk
-            rm -rf fnpack_arm_prebuilt
-            echo "ARM-prebuilt FPK built successfully."
+            mv fnpack_arm/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm.fpk
+            rm -rf fnpack_arm
+            echo "ARM FPK built successfully."
           ) &
-          PID_ARM_PREBUILT=$!
+          PID_ARM=$!
 
-          # 3. x86 源码版
-          (
-            mkdir -p fnpack_x86_source/app/bin
-            cp -r fnpack/* fnpack_x86_source/
-            echo "source" > fnpack_x86_source/app/.pkg_type
-            cp /tmp/amd64-dist/version.txt fnpack_x86_source/app/.version
-            cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_x86_source/app/deepseek-harness.tar.gz
-            cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86_source/app/bin/${{ env.BIN_NAME }}
-            cd fnpack_x86_source
-            chmod +x ${{ env.FNPACK_BIN }}
-            ./${{ env.FNPACK_BIN }} build
-            cd ..
-            mv fnpack_x86_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-x86.fpk
-            rm -rf fnpack_x86_source
-            echo "x86-source FPK built successfully."
-          ) &
-          PID_X86_SOURCE=$!
-
-          # 4. arm 源码版
-          (
-            mkdir -p fnpack_arm_source/app/bin
-            cp -r fnpack/* fnpack_arm_source/
-            echo "source" > fnpack_arm_source/app/.pkg_type
-            cp /tmp/amd64-dist/version.txt fnpack_arm_source/app/.version
-            cp /tmp/amd64-dist/deepseek-harness-source.tar.gz fnpack_arm_source/app/deepseek-harness.tar.gz
-            cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm_source/app/bin/${{ env.BIN_NAME }}
-            sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm_source/manifest
-            cd fnpack_arm_source
-            chmod +x ${{ env.FNPACK_BIN }}
-            ./${{ env.FNPACK_BIN }} build
-            cd ..
-            mv fnpack_arm_source/${{ env.BIN_NAME }}.fpk ./${{ env.BIN_NAME }}-arm.fpk
-            rm -rf fnpack_arm_source
-            echo "ARM-source FPK built successfully."
-          ) &
-          PID_ARM_SOURCE=$!
-
-          # 等待所有后台任务并捕获失败退出码
           FAIL=0
-          for pid in $PID_X86_PREBUILT $PID_ARM_PREBUILT $PID_X86_SOURCE $PID_ARM_SOURCE; do
+          for pid in $PID_X86 $PID_ARM; do
             wait $pid || FAIL=1
           done
 
@@ -517,28 +461,14 @@ jobs:
           echo "upstream_ver=$UPSTREAM_VER" >> $GITHUB_OUTPUT
           echo "Release version: $APP_VER, Upstream version: $UPSTREAM_VER"
 
-      - name: Upload x86 Prebuilt FPK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BIN_NAME }}-x86-prebuilt
-          path: ./${{ env.BIN_NAME }}-x86-prebuilt.fpk
-          if-no-files-found: error
-
-      - name: Upload ARM Prebuilt FPK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BIN_NAME }}-arm-prebuilt
-          path: ./${{ env.BIN_NAME }}-arm-prebuilt.fpk
-          if-no-files-found: error
-
-      - name: Upload x86 Source FPK
+      - name: Upload x86 FPK
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BIN_NAME }}-x86
           path: ./${{ env.BIN_NAME }}-x86.fpk
           if-no-files-found: error
 
-      - name: Upload ARM Source FPK
+      - name: Upload ARM FPK
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BIN_NAME }}-arm
@@ -566,14 +496,12 @@ jobs:
           tag_name: "v${{ steps.manifest.outputs.version }}"
           name: "Release v${{ steps.manifest.outputs.version }}"
           body: |
-            ### 安装包版本说明
+            ### 安装包说明
 
-            | 文件名 | 架构 | 类型 | 说明 |
-            | :--- | :---: | :---: | :--- |
-            | `deepseek.harness-x86-prebuilt.fpk` | x86_64 | 预构建版 | 内置前端产物、后端编译文件及运行时依赖，安装后直接启动服务。 |
-            | `deepseek.harness-arm-prebuilt.fpk` | ARM64 | 预构建版 | 内置前端产物、后端编译文件及运行时依赖，安装后直接启动服务。 |
-            | `deepseek.harness-x86.fpk` | x86_64 | 源码版 | 仅包含项目源码，首次安装启动时在本地自动下载依赖并执行构建。 |
-            | `deepseek.harness-arm.fpk` | ARM64 | 源码版 | 仅包含项目源码，首次安装启动时在本地自动下载依赖并执行构建。 |
+            | 文件名 | 架构 | 说明 |
+            | :--- | :---: | :--- |
+            | `deepseek.harness-x86.fpk` | x86_64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |
+            | `deepseek.harness-arm.fpk` | ARM64 | 预构建完整离线包，内置前端产物、后端文件及完整依赖，安装后极速秒级启动。 |
 
             ---
             - 应用版本：`v${{ steps.manifest.outputs.version }}`
@@ -583,8 +511,6 @@ jobs:
           prerelease: false
           make_latest: true
           files: |
-            ${{ env.BIN_NAME }}-x86-prebuilt.fpk
-            ${{ env.BIN_NAME }}-arm-prebuilt.fpk
             ${{ env.BIN_NAME }}-x86.fpk
             ${{ env.BIN_NAME }}-arm.fpk
 
@@ -600,39 +526,23 @@ jobs:
             exit 0
           fi
 
-          # 1. 计算安装包大小 (MB, 保留一位小数，均以 x86 为准)
-          PREBUILT_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86-prebuilt.fpk" | awk '{printf "%.1f", $5/1024/1024}')
-          SOURCE_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86.fpk" | awk '{printf "%.1f", $5/1024/1024}')
+          # 1. 计算安装包大小 (MB, 保留一位小数，以 x86 为准)
+          APP_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86.fpk" | awk '{printf "%.1f", $5/1024/1024}')
           
           # 2. 构造下载链接
-          PREBUILT_X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86-prebuilt.fpk"
-          PREBUILT_ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm-prebuilt.fpk"
-          
-          SOURCE_X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86.fpk"
-          SOURCE_ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm.fpk"
+          X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86.fpk"
+          ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm.fpk"
           
           # 3. 待同步更新的目标仓库列表
-          TARGET_REPOS=("yuexps/FnDepot" "shuangji66/FnDepot")
+          TARGET_REPOS=("yuexps/FnDepot")
 
           for REPO in "${TARGET_REPOS[@]}"; do
             echo "----------------------------------------"
             echo "Processing: $REPO"
             REPO_DIR="repo_$(echo "$REPO" | tr '/' '_')"
             
-            # yuexps/FnDepot 对应源码版，shuangji66/FnDepot 对应预构建版
-            if [ "$REPO" = "yuexps/FnDepot" ]; then
-              APP_SIZE="$SOURCE_SIZE"
-              X86_URL="$SOURCE_X86_URL"
-              ARM_URL="$SOURCE_ARM_URL"
-            else
-              APP_SIZE="$PREBUILT_SIZE"
-              X86_URL="$PREBUILT_X86_URL"
-              ARM_URL="$PREBUILT_ARM_URL"
-            fi
-            
             echo "Updating $REPO -> Version: $VERSION, Size: $APP_SIZE"
             
-            # 克隆目标仓库
             git clone "https://x-access-token:${GH_PAT}@github.com/${REPO}.git" "$REPO_DIR" || {
               echo "::warning::Clone $REPO failed, skipping."
               continue
@@ -641,7 +551,6 @@ jobs:
             pushd "$REPO_DIR" > /dev/null
             
             if [ -f "fnpack.json" ]; then
-              # 使用 jq 精确修改 deepseek.harness 对应字段
               jq --arg ver "$VERSION" \
                  --arg size "$APP_SIZE" \
                  --arg x86_url "$X86_URL" \
@@ -653,7 +562,6 @@ jobs:
                  .["deepseek.harness"].arch_diff.arm.download_url = $arm_url
                  ' fnpack.json > fnpack.json.tmp && mv fnpack.json.tmp fnpack.json
                  
-              # 配置 Git 信息并提交推送
               git config user.name "github-actions[bot]"
               git config user.email "github-actions[bot]@users.noreply.github.com"
               

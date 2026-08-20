@@ -587,13 +587,13 @@ func stopReverseProxyLocked() {
 func proxyErrMessage() string {
 	switch state.Status() {
 	case StatusStarting:
-		return "服务启动中，请稍候重试"
+		return "服务正在启动"
 	case StatusRunning:
-		return "服务响应异常，请检查后端运行状态"
+		return "服务响应异常"
 	case StatusBuilding:
-		return "服务构建中，请稍候重试"
+		return "服务正在构建"
 	case StatusStopped:
-		return "服务未启动，请在概览页启动"
+		return "服务未运行"
 	default:
 		return "无法连接到后端服务"
 	}

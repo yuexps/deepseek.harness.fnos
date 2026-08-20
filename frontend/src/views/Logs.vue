@@ -30,20 +30,15 @@
           </n-button>
 
           <!-- 清空日志按钮 -->
-          <n-popconfirm @positive-click="handleClear" positive-text="确认清空" negative-text="取消">
-            <template #trigger>
-              <n-button size="small" secondary type="error" title="清空日志"
-                class="!px-2 sm:!px-2.5">
-                <div class="flex items-center justify-center gap-1">
-                  <n-icon :size="16">
-                    <Trash />
-                  </n-icon>
-                  <span class="hidden sm:inline">清空</span>
-                </div>
-              </n-button>
-            </template>
-            确定要清空所有运行日志吗？
-          </n-popconfirm>
+          <n-button size="small" secondary type="error" title="清空日志" @click="promptClearLogs"
+            class="!px-2 sm:!px-2.5">
+            <div class="flex items-center justify-center gap-1">
+              <n-icon :size="16">
+                <Trash />
+              </n-icon>
+              <span class="hidden sm:inline">清空</span>
+            </div>
+          </n-button>
         </n-flex>
       </template>
 
@@ -99,13 +94,13 @@ import {
   NCard,
   NSwitch,
   NButton,
-  NPopconfirm,
   NFlex,
   NIcon,
   NTooltip,
   NLog,
   NSpin,
   useMessage,
+  useDialog,
   type LogInst
 } from 'naive-ui'
 import { Download, Trash, ArrowDown } from '@vicons/tabler'
@@ -157,6 +152,7 @@ hljs.registerLanguage('harness-log', () => ({
 
 const logStore = useLogStore()
 const message = useMessage()
+const dialog = useDialog()
 const isTouch = useIsTouchDevice()
 const { displayedText, logAutoScroll: autoScroll, fetching } = storeToRefs(logStore)
 
@@ -195,6 +191,19 @@ const handleClear = withAsyncLock(async () => {
     message.error(res.message || '清空日志失败')
   }
 })
+
+// 清空日志全局模态二次确认
+function promptClearLogs() {
+  dialog.warning({
+    title: '确认清空运行日志？',
+    content: '确定要清空所有历史运行日志吗？清空后将无法恢复。',
+    positiveText: '确认清空',
+    negativeText: '取消',
+    onPositiveClick: () => {
+      void handleClear()
+    }
+  })
+}
 
 onMounted(() => {
   if (!logStore.hasLoadedSnapshot) {

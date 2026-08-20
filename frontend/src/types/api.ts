@@ -40,6 +40,19 @@ export interface StatusData {
 }
 
 /**
+ * 检查更新结果模型
+ */
+export interface CheckUpdateResult {
+  has_update: boolean
+  current_version?: string
+  remote_version?: string
+  current_commit: string
+  remote_commit: string
+  remote_short_commit: string
+  message: string
+}
+
+/**
  * 工作区项模型
  */
 export interface WorkspaceItem {
@@ -64,9 +77,8 @@ export interface WorkspaceData {
  * - live: 正常作为层活跃运行中
  * - disabled: 在 cordis.patch.yml 中被显式禁用
  * - inert: 已安装依赖但未声明 dsh.bundle
- * - broken: Loader 加载崩溃或存在异常
  */
-export type PluginState = 'live' | 'disabled' | 'inert' | 'broken'
+export type PluginState = 'live' | 'disabled' | 'inert'
 
 /**
  * 已安装插件模型
@@ -85,7 +97,6 @@ export interface PluginItem {
   keywords?: string[]
   isProtected?: boolean
   hasBundle?: boolean
-  errorReason?: string
 }
 
 /**

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { StatusData, RequestResult } from '../types/api'
+import type { StatusData, CheckUpdateResult, RequestResult } from '../types/api'
 import { systemApi, configApi } from '../api'
 import { trimSdk } from '../utils/trimSdk'
 import { usePluginStore } from './plugin'
@@ -21,10 +21,23 @@ export const useSystemStore = defineStore('system', () => {
   const wsConnected = ref(true)
   const serverTimeOffset = ref(0)
   const activeAction = ref<string | null>(null)
+  const isCheckingUpdate = ref(false)
   const currentTime = ref(Date.now())
+  const statusLoaded = ref(false)
 
   let clockTimer: ReturnType<typeof setInterval> | null = null
   let actionTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+  let statusTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+
+  // 启动 3 秒超时保底：超过 3 秒若未收到状态也强制放行渲染
+  function startStatusTimeout() {
+    if (statusLoaded.value) return
+    if (!statusTimeoutTimer) {
+      statusTimeoutTimer = setTimeout(() => {
+        statusLoaded.value = true
+      }, 3000)
+    }
+  }
 
   function clearActionLock() {
     activeAction.value = null
@@ -53,6 +66,12 @@ export const useSystemStore = defineStore('system', () => {
   }
 
   function updateStatus(data: Partial<StatusData>) {
+    statusLoaded.value = true
+    if (statusTimeoutTimer) {
+      clearTimeout(statusTimeoutTimer)
+      statusTimeoutTimer = null
+    }
+
     const oldStatus = statusData.value.status
     statusData.value = {
       ...statusData.value,
@@ -151,6 +170,18 @@ export const useSystemStore = defineStore('system', () => {
     return { success: false, message: '请求失败' }
   }
 
+  async function checkUpdate(): Promise<RequestResult<CheckUpdateResult>> {
+    if (isCheckingUpdate.value) {
+      return { success: false, message: '正在检查更新中，请稍候' }
+    }
+    isCheckingUpdate.value = true
+    try {
+      return await systemApi.checkUpdate()
+    } finally {
+      isCheckingUpdate.value = false
+    }
+  }
+
   async function openHarnessApp(): Promise<void> {
     const res = await configApi.getConfig()
     const cfg = res.success ? res.data : null
@@ -172,11 +203,27 @@ export const useSystemStore = defineStore('system', () => {
     await trimSdk.openURL(gatewayUrl, '_blank')
   }
 
+  // 首屏快速拉取状态
+  async function fetchInitialStatus(): Promise<void> {
+    if (statusLoaded.value) return
+    startStatusTimeout()
+    try {
+      const res = await systemApi.getStatus()
+      if (res.success && res.data) {
+        updateStatus(res.data)
+      }
+    } catch {
+      // 捕获异常，依赖 WebSocket 或 3 秒超时保底
+    }
+  }
+
   return {
     statusData,
+    statusLoaded,
     wsConnected,
     serverTimeOffset,
     activeAction,
+    isCheckingUpdate,
     isActionLocked,
     isRunning,
     isStarting,
@@ -188,7 +235,9 @@ export const useSystemStore = defineStore('system', () => {
     stopClock,
     setWsConnected,
     updateStatus,
+    fetchInitialStatus,
     sendAction,
+    checkUpdate,
     openHarnessApp
   }
 })

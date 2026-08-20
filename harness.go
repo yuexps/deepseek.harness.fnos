@@ -129,6 +129,36 @@ var (
 	pkgVarDir string
 )
 
+// deployPrebuilt 部署内置离线包并启动服务
+func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
+	state.SetStatus(StatusBuilding, "正在准备部署预构建包...")
+	go func() {
+		installedVer := readVersion()
+		if isUpgrade {
+			state.SetStatus(StatusBuilding, fmt.Sprintf("正在增量部署预构建包 (v%s → v%s)...", installedVer, zipVer))
+			LogInfo("检测到新版本预构建包 (v%s → v%s)，开始增量解压部署: %s", installedVer, zipVer, tarPath)
+		} else {
+			state.SetStatus(StatusBuilding, "正在解压部署内置预构建包...")
+			LogInfo("初次安装解压预构建包: %s (版本: v%s)", tarPath, zipVer)
+		}
+
+		if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
+			LogWarning("解压部署预构建包失败: %s", err)
+			state.SetStatus(StatusStopped, "解压离线安装包失败: "+err.Error())
+			return
+		}
+
+		fixPermissions(srcDir)
+		refreshCommit()
+		SetBuildTime(time.Now())
+		state.SetStatus(StatusStopped, "")
+		LogInfo("预构建包部署就绪，正在启动服务")
+		if err := Start(); err != nil {
+			LogWarning("服务启动失败: %s", err)
+		}
+	}()
+}
+
 func InitHarness(pkgVar, appdest string) {
 	pkgVarDir = pkgVar
 	srcDir = filepath.Join(pkgVar, "src", "deepseek-harness")
@@ -144,38 +174,31 @@ func InitHarness(pkgVar, appdest string) {
 	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
 	zipVer := readAppDestVersion()
 
-	// 1. 若 srcDir 不存在：初次安装解压/克隆
-	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		state.SetStatus(StatusBuilding, "正在准备初始化...")
+	// 1. 首次安装或源码损坏：isSourceValid() 为 false
+	if !isSourceValid() {
+		if _, err := os.Stat(tarPath); err == nil {
+			_ = safeRemoveAll(srcDir)
+			deployPrebuilt(tarPath, zipVer, false)
+			return
+		}
+		// 未内置压缩包时，通过 Git 克隆源码并编译启动
+		state.SetStatus(StatusBuilding, "未检测到内置预构建包，正在从远程克隆源码...")
+		LogInfo("未检测到内置预构建包 (%s)，开始通过 Git 克隆源码: %s", tarPath, repoURL)
 		go func() {
-			if _, err := os.Stat(tarPath); err == nil {
-				pkgName := pkgTypeName()
-				state.SetStatus(StatusBuilding, fmt.Sprintf("正在解压%s...", pkgName))
-				LogInfo("解压%s: %s (版本: %s)", pkgName, tarPath, zipVer)
-				if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
-					LogWarning("解压%s失败: %s", pkgName, err)
-					state.SetStatus(StatusStopped, "解压失败，请点击【更新构建】重试")
-					return
-				}
-				_ = os.Remove(tarPath)
-			} else {
-				state.SetStatus(StatusBuilding, "正在克隆源码...")
-				LogInfo("Git 克隆源码: %s", repoURL)
-				if err := gitClone(); err != nil {
-					LogWarning("Git 克隆失败: %s", err)
-					state.SetStatus(StatusStopped, "克隆失败，请检查网络后点击【更新构建】")
-					return
-				}
+			_ = safeRemoveAll(srcDir)
+			if err := gitClone(); err != nil {
+				LogWarning("Git 克隆源码失败: %s", err)
+				state.SetStatus(StatusStopped, formatGitError("克隆源码失败", err))
+				return
 			}
-
-			if err := buildSource(true); err != nil {
-				LogWarning("源码构建失败: %s", err)
-				state.SetStatus(StatusStopped, "构建失败，请点击【更新构建】重试")
+			if err := buildFromSource(false); err != nil {
+				LogWarning("源码构建初始化失败: %s", err)
+				state.SetStatus(StatusStopped, "构建失败: "+err.Error())
 				return
 			}
 			refreshCommit()
 			state.SetStatus(StatusStopped, "")
-			LogInfo("初始化安装完成，正在启动服务")
+			LogInfo("源码克隆与构建完成，正在启动服务")
 			if err := Start(); err != nil {
 				LogWarning("服务启动失败: %s", err)
 			}
@@ -183,43 +206,17 @@ func InitHarness(pkgVar, appdest string) {
 		return
 	}
 
-	// 2. 若 srcDir 已存在：检查内置源码包版本是否高于当前版本
+	// 2. FPK 包升级：检查内置预构建包版本是否高于当前安装版本
 	if _, err := os.Stat(tarPath); err == nil {
 		installedVer := readVersion()
-		if zipVer != "" && compareSemver(zipVer, installedVer) > 0 {
-			pkgName := pkgTypeName()
-			state.SetStatus(StatusBuilding, fmt.Sprintf("检测到新版本%s，正在准备更新...", pkgName))
-			go func() {
-				state.SetStatus(StatusBuilding, fmt.Sprintf("正在增量替换%s (%s → %s)...", pkgName, installedVer, zipVer))
-				LogInfo("检测到%s版本更新 (%s → %s)，开始增量解压替换", pkgName, installedVer, zipVer)
-				if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
-					LogWarning("增量解压替换%s失败: %s", pkgName, err)
-					state.SetStatus(StatusStopped, "解压更新失败，请点击【强制重建】重试")
-					return
-				}
-				_ = os.Remove(tarPath)
-
-				if err := buildSource(true); err != nil {
-					LogWarning("增量更新后源码构建失败: %s", err)
-					state.SetStatus(StatusStopped, "构建失败，请点击【强制重建】重试")
-					return
-				}
-				refreshCommit()
-				state.SetStatus(StatusStopped, "")
-				LogInfo("增量版本更新完成，正在启动服务")
-				if err := Start(); err != nil {
-					LogWarning("服务启动失败: %s", err)
-				}
-			}()
+		if zipVer != "" && CompareSemver(zipVer, installedVer) > 0 {
+			deployPrebuilt(tarPath, zipVer, true)
 			return
 		}
-
-		// 压缩包版本不高于已安装版本，直接清理
-		pkgName := pkgTypeName()
-		_ = os.Remove(tarPath)
-		LogInfo("%s版本 (%s) 不高于当前版本 (%s)，清理并跳过解压", pkgName, zipVer, installedVer)
+		LogInfo("内置预构建包版本 (v%s) 未高于已安装版本 (v%s)，跳过解压", zipVer, installedVer)
 	}
 
+	// 3. 常规启动：直接刷新版本并按上次状态自启
 	refreshCommit()
 	if GetLastRunState() == StatusRunning {
 		LogInfo("检测到上次运行状态为 running，正在自动拉起服务")
@@ -246,11 +243,11 @@ func Start() error {
 	if state.Status() == StatusRunning {
 		return fmt.Errorf("服务已在运行中")
 	}
-	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		return fmt.Errorf("源码不存在，请先点击【拉取更新】进行初始化")
+	if !isSourceValid() {
+		return fmt.Errorf("运行环境未就绪或关键文件缺失")
 	}
 	if _, err := os.Stat(filepath.Join(srcDir, "node_modules")); os.IsNotExist(err) {
-		return fmt.Errorf("依赖未安装，请先点击【强制重建】进行构建")
+		return fmt.Errorf("依赖未安装或文件缺失")
 	}
 
 	return startLocked()
@@ -283,7 +280,7 @@ func dshCliCmd(subArgs ...string) (string, []string) {
 
 func startLocked() error {
 	killHarnessLocked()
-	ClearAllPluginFailures()
+	fixPermissions(srcDir)
 
 	cfg := GetConfig()
 	port := cfg.ServerPort
@@ -296,7 +293,7 @@ func startLocked() error {
 	cmd.Dir = srcDir
 	cmd.Stdout = NewLogWriterInfo()
 	cmd.Stderr = NewLogWriterWarn()
-	setProcessGroup(cmd)
+	setProcessGroupAndUser(cmd, os.Getenv("DSH_RUN_USER"))
 
 	if err := cmd.Start(); err != nil {
 		state.SetStatus(StatusStopped, "启动失败: "+err.Error())
