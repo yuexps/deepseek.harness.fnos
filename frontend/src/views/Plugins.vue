@@ -23,24 +23,6 @@
       </div>
     </div>
 
-    <!-- 插件操作执行中提示横幅 -->
-    <div v-if="busy" v-auto-animate class="w-full min-w-0">
-      <n-alert type="info" :show-icon="true"
-        class="rounded-2xl shadow-xs border border-blue-200 dark:border-blue-900/40">
-        <div class="flex items-center justify-between gap-3 min-w-0">
-          <div class="flex items-center gap-2 min-w-0 flex-1">
-            <n-spin :size="14" class="shrink-0" />
-            <span class="text-xs text-blue-800 dark:text-blue-200 font-medium truncate">
-              正在执行插件任务（安装 / 卸载 / 更新），请稍候…
-            </span>
-          </div>
-          <n-button type="error" size="tiny" secondary @click="handleCancel"
-            class="shrink-0 rounded-lg !h-6 !px-2.5 text-xs font-medium transition-transform duration-150 active:scale-95">
-            终止操作
-          </n-button>
-        </div>
-      </n-alert>
-    </div>
 
     <!-- 配置变更重启提醒横幅 -->
     <div v-if="isRunning && needRestart" v-auto-animate class="w-full min-w-0">

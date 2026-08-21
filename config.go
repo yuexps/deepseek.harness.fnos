@@ -50,7 +50,9 @@ func InitConfig(pkgVar string) {
 func InitAppEnv(pkgVar string) {
 	pnpmBinDir := filepath.Join(pkgVar, "pnpm-env", "node_modules", ".bin")
 	_ = os.Setenv("PATH", pnpmBinDir+":"+nodeBinDir+":/bin:/usr/bin:"+os.Getenv("PATH"))
-	_ = os.Setenv("HOME", filepath.Join(pkgVar, "home"))
+	homeDir := filepath.Join(pkgVar, "home")
+	_ = os.MkdirAll(homeDir, 0755)
+	_ = os.Setenv("HOME", homeDir)
 	_ = os.Setenv("CI", "true")
 
 	pnpmHome := filepath.Join(pkgVar, "pnpm-home")
@@ -60,6 +62,15 @@ func InitAppEnv(pkgVar string) {
 	_ = os.Setenv("npm_config_store_dir", storeDir)
 	_ = os.Setenv("npm_config_cache", filepath.Join(pkgVar, "npm-cache"))
 	_ = os.Setenv("npm_config_registry", "https://registry.npmmirror.com")
+	_ = os.Setenv("NPM_CONFIG_REGISTRY", "https://registry.npmmirror.com")
+	_ = os.Setenv("pnpm_config_registry", "https://registry.npmmirror.com")
+	_ = os.Setenv("PNPM_CONFIG_REGISTRY", "https://registry.npmmirror.com")
+
+	// 固化全局 .npmrc 确保 pnpm 11 及子进程稳定使用国内镜像
+	homeNpmrc := filepath.Join(homeDir, ".npmrc")
+	if _, err := os.Stat(homeNpmrc); os.IsNotExist(err) {
+		_ = os.WriteFile(homeNpmrc, []byte("registry=https://registry.npmmirror.com\n"), 0644)
+	}
 
 	dshHome := filepath.Join(pkgVar, "dsh-data")
 	_ = os.Setenv("DSH_HOME", dshHome)

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -172,7 +175,7 @@ func safeRemoveAll(path string) error {
 	return os.RemoveAll(path)
 }
 
-// fixPermissions 启动前权限轻量检查：确保运行关键凭据与沙箱组件具备基础权限
+// fixPermissions 启动前权限轻量检查与属主纠偏
 func fixPermissions(targetDir string) {
 	if targetDir != "" {
 		_ = os.Chmod(targetDir, 0755)
@@ -194,6 +197,47 @@ func fixPermissions(targetDir string) {
 
 	// 全局配置 safe.directory 防止所有权安全报警
 	_ = exec.Command(gitBin, "config", "--global", "--add", "safe.directory", "*").Run()
+
+	// 非 root 用户运行时自动纠偏目标目录与功能数据目录属主
+	runUser := os.Getenv("DSH_RUN_USER")
+	if runUser != "" && runUser != "root" {
+		targetUser := runUser
+		if targetUser == "package" {
+			targetUser = "deepseek.harness"
+		}
+		if u, err := user.Lookup(targetUser); err == nil {
+			if uid64, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
+				targetUid := uint32(uid64)
+				if targetDir != "" && isOwnerMismatch(targetDir, targetUid) {
+					LogInfo("检测到目录属主不匹配，正在纠偏为 %s: %s", targetUser, targetDir)
+					if err := exec.Command("chown", "-R", targetUser, targetDir).Run(); err != nil {
+						LogWarning("纠偏目录属主失败 [%s]: %s", targetDir, err)
+					}
+				}
+				for _, sub := range []string{"dsh-data", "home", "plugins"} {
+					p := filepath.Join(pkgVarDir, sub)
+					if isOwnerMismatch(p, targetUid) {
+						LogInfo("检测到数据目录属主不匹配，正在纠偏为 %s: %s", targetUser, p)
+						if err := exec.Command("chown", "-R", targetUser, p).Run(); err != nil {
+							LogWarning("纠偏数据目录属主失败 [%s]: %s", p, err)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// isOwnerMismatch 检查路径属主是否与目标 UID 不一致
+func isOwnerMismatch(path string, targetUid uint32) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return stat.Uid != targetUid
+	}
+	return false
 }
 
 // RepairEnvironment 恢复出厂设置：清空第三方插件与挂载配置，重新部署纯净运行环境
@@ -388,7 +432,7 @@ func installPnpm() error {
 	}
 	pnpmDir := filepath.Join(pkgVarDir, "pnpm-env")
 	_ = os.MkdirAll(pnpmDir, 0755)
-	return runCmd(pnpmDir, npmBin(), "install", "pnpm")
+	return runCmd(pnpmDir, npmBin(), "install", "pnpm", "--registry=https://registry.npmmirror.com")
 }
 
 func ensureGCC() error {
@@ -516,6 +560,7 @@ func buildFromSource(forceClean bool) error {
 		return err
 	}
 
+	fixPermissions(srcDir)
 	SetBuildTime(time.Now())
 	return nil
 }

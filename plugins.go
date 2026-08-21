@@ -35,6 +35,8 @@ func pluginEnv() []string {
 		"PNPM_CONFIG_FETCH_TIMEOUT=30000",
 		"PNPM_CONFIG_NETWORK_TIMEOUT=30000",
 		"PNPM_CONFIG_FETCH_RETRIES=2",
+		"PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
+		"NPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
 	)
 }
 
@@ -255,6 +257,9 @@ func (c *pluginCommand) dshArgs() []string {
 	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
 	if (c.Verb == pluginAdd || c.Verb == pluginRemove) && profileHasWorkspace() {
 		args = append(args, "-w")
+	}
+	if c.Verb == pluginAdd || c.Verb == pluginInstall {
+		args = append(args, "--config.minimumReleaseAge=0")
 	}
 	args = append(args, c.Specs...)
 	return args

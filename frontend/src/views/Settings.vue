@@ -122,7 +122,7 @@
                 <n-form-item label="访问控制密码" path="access_password">
                   <template #label>
                     <div class="flex items-center gap-1.5">
-                      <span>访问控制密码</span>
+                      <span>反代访问密码</span>
                       <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
                         <template #trigger>
                           <n-icon size="14"
