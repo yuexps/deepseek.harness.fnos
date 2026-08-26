@@ -152,7 +152,6 @@ func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 			LogWarning("初始化 pnpm 运行环境失败: %s", err)
 		}
 
-		fixPermissions(srcDir)
 		refreshCommit()
 		SetBuildTime(time.Now())
 		state.SetStatus(StatusStopped, "")
@@ -167,10 +166,6 @@ func InitHarness(pkgVar, appdest string) {
 	pkgVarDir = pkgVar
 	srcDir = filepath.Join(pkgVar, "src", "deepseek-harness")
 	appDest = appdest
-
-	// 全局配置 safe.directory，避免所有权异常导致 git 操作被拦截
-	configCmd := exec.Command(gitBin, "config", "--global", "--add", "safe.directory", "*")
-	_ = configCmd.Run()
 
 	KillHarness()
 	StartWatchdog()
@@ -287,7 +282,12 @@ func dshCliCmd(subArgs ...string) (string, []string) {
 
 func startLocked() error {
 	killHarnessLocked()
-	fixPermissions(srcDir)
+
+	// 保护敏感凭据文件仅属主可读写 (mode 600)
+	credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
+	if _, err := os.Stat(credFile); err == nil {
+		_ = os.Chmod(credFile, 0600)
+	}
 
 	cfg := GetConfig()
 	port := cfg.ServerPort
@@ -300,7 +300,7 @@ func startLocked() error {
 	cmd.Dir = srcDir
 	cmd.Stdout = NewLogWriterInfo()
 	cmd.Stderr = NewLogWriterWarn()
-	setProcessGroupAndUser(cmd, os.Getenv("DSH_RUN_USER"))
+	setProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		state.SetStatus(StatusStopped, "启动失败: "+err.Error())

@@ -36,7 +36,7 @@
                     },
                     {
                         "label": "普通用户 (Package)",
-                        "value": "package"
+                        "value": "deepseek.harness"
                     }
                 ],
                 "rules": [

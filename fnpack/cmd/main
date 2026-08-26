@@ -11,8 +11,11 @@ else
     DATA_LIBRARY_PATH="${TRIM_DATA_SHARE_PATHS%%:*}"
 fi
 
+DSH_RUN_USER="${wizard_dsh_run_user:-root}"
+[ "${DSH_RUN_USER}" = "package" ] && DSH_RUN_USER="deepseek.harness"
+
 export DATA_LIBRARY_PATH="${DATA_LIBRARY_PATH}"
-export DSH_RUN_USER="${wizard_dsh_run_user:-root}"
+export DSH_RUN_USER="${DSH_RUN_USER}"
 
 CMD="${TRIM_APPDEST}/bin/deepseek.harness"
 
@@ -30,7 +33,11 @@ start_process() {
     fi
 
     log_msg "正在启动 deepseek.harness 应用进程 (CMD=${CMD}, DATA_LIBRARY_PATH=${DATA_LIBRARY_PATH})..."
-    bash -c "${CMD}" &
+    if [ "${DSH_RUN_USER}" != "root" ] && id "${DSH_RUN_USER}" >/dev/null 2>&1; then
+        su -s /bin/bash "${DSH_RUN_USER}" -c "${CMD}" &
+    else
+        bash -c "${CMD}" &
+    fi
     local pid=$!
     printf "%s" "${pid}" > ${PID_FILE}
 

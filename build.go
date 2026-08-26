@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -175,71 +172,6 @@ func safeRemoveAll(path string) error {
 	return os.RemoveAll(path)
 }
 
-// fixPermissions 启动前权限轻量检查与属主纠偏
-func fixPermissions(targetDir string) {
-	if targetDir != "" {
-		_ = os.Chmod(targetDir, 0755)
-	}
-
-	// 确保敏感凭据文件仅属主可读写 (mode 600)
-	if pkgVarDir != "" {
-		credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
-		if _, err := os.Stat(credFile); err == nil {
-			_ = os.Chmod(credFile, 0600)
-		}
-	}
-
-	// 针对 landlock-run 等原生沙箱组件赋予可执行权限
-	landlockBin := landlockBinPath()
-	if _, err := os.Stat(landlockBin); err == nil {
-		_ = os.Chmod(landlockBin, 0755)
-	}
-
-	// 全局配置 safe.directory 防止所有权安全报警
-	_ = exec.Command(gitBin, "config", "--global", "--add", "safe.directory", "*").Run()
-
-	// 非 root 用户运行时自动纠偏目标目录与功能数据目录属主
-	runUser := os.Getenv("DSH_RUN_USER")
-	if runUser != "" && runUser != "root" {
-		targetUser := runUser
-		if targetUser == "package" {
-			targetUser = "deepseek.harness"
-		}
-		if u, err := user.Lookup(targetUser); err == nil {
-			if uid64, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
-				targetUid := uint32(uid64)
-				if targetDir != "" && isOwnerMismatch(targetDir, targetUid) {
-					LogInfo("检测到目录属主不匹配，正在纠偏为 %s: %s", targetUser, targetDir)
-					if err := exec.Command("chown", "-R", targetUser, targetDir).Run(); err != nil {
-						LogWarning("纠偏目录属主失败 [%s]: %s", targetDir, err)
-					}
-				}
-				for _, sub := range []string{"dsh-data", "home", "plugins"} {
-					p := filepath.Join(pkgVarDir, sub)
-					if isOwnerMismatch(p, targetUid) {
-						LogInfo("检测到数据目录属主不匹配，正在纠偏为 %s: %s", targetUser, p)
-						if err := exec.Command("chown", "-R", targetUser, p).Run(); err != nil {
-							LogWarning("纠偏数据目录属主失败 [%s]: %s", p, err)
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-// isOwnerMismatch 检查路径属主是否与目标 UID 不一致
-func isOwnerMismatch(path string, targetUid uint32) bool {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return stat.Uid != targetUid
-	}
-	return false
-}
-
 // RepairEnvironment 恢复出厂设置：清空第三方插件与挂载配置，重新部署纯净运行环境
 func RepairEnvironment() {
 	state.SetStatus(StatusBuilding, "正在准备恢复出厂设置...")
@@ -273,7 +205,6 @@ func repairEnvironment() {
 		LogWarning("初始化 pnpm 运行环境失败: %s", err)
 	}
 
-	fixPermissions(srcDir)
 	refreshCommit()
 	SetBuildTime(time.Now())
 	state.SetStatus(StatusStopped, "")
@@ -435,26 +366,11 @@ func installPnpm() error {
 	return runCmd(pnpmDir, npmBin(), "install", "pnpm", "--registry=https://registry.npmmirror.com")
 }
 
-func ensureGCC() error {
-	if _, err := exec.LookPath("gcc"); err == nil {
+func ensureTool(bin, pkg string) error {
+	if _, err := exec.LookPath(bin); err == nil {
 		return nil
 	}
-	state.SetStatus(StatusBuilding, "正在自动安装 gcc 编译工具链...")
-	LogInfo("系统未检测到 gcc，开始配置软件源并安装 build-essential")
-	if err := fixAptSources(); err != nil {
-		LogWarning("更新 apt 软件源失败: %s", err)
-	}
-	if err := runCmd("/", "apt-get", "update"); err != nil {
-		LogWarning("apt-get update 失败: %s", err)
-	}
-	if err := runCmd("/", "apt-get", "install", "-y", "--no-install-recommends", "build-essential"); err != nil {
-		return fmt.Errorf("安装 build-essential 失败: %w，请在宿主机终端手动执行 apt-get install -y build-essential", err)
-	}
-	if _, err := exec.LookPath("gcc"); err != nil {
-		return fmt.Errorf("build-essential 安装后仍未检测到 gcc，请手动安装")
-	}
-	LogInfo("gcc 编译工具链安装完成")
-	return nil
+	return fmt.Errorf("系统未检测到 %s 编译工具链，请在宿主机终端执行: sudo apt-get update && sudo apt-get install -y %s", bin, pkg)
 }
 
 func landlockNativeDir() string {
@@ -465,43 +381,6 @@ func landlockNativeDir() string {
 	return filepath.Join(srcDir, "native", "landlock-run", "packages", "linux-"+arch)
 }
 
-func fixAptSources() error {
-	sourcesList := "/etc/apt/sources.list"
-	data, err := os.ReadFile(sourcesList)
-	if err != nil {
-		return nil
-	}
-	content := string(data)
-	if strings.Contains(content, "deb.debian.org") {
-		content = strings.ReplaceAll(content, "deb.debian.org", "mirrors.ustc.edu.cn")
-		content = strings.ReplaceAll(content, "security.debian.org", "mirrors.ustc.edu.cn")
-		_ = os.WriteFile(sourcesList, []byte(content), 0644)
-	}
-	return nil
-}
-
-func ensureMusl() error {
-	if _, err := exec.LookPath("musl-gcc"); err == nil {
-		return nil
-	}
-	state.SetStatus(StatusBuilding, "正在自动安装 musl-tools 工具链...")
-	LogInfo("系统未检测到 musl-gcc，开始安装 musl-tools")
-	if err := fixAptSources(); err != nil {
-		LogWarning("更新 apt 软件源失败: %s", err)
-	}
-	if err := runCmd("/", "apt-get", "update"); err != nil {
-		LogWarning("apt-get update 失败: %s", err)
-	}
-	if err := runCmd("/", "apt-get", "install", "-y", "--no-install-recommends", "musl-tools"); err != nil {
-		return fmt.Errorf("安装 musl-tools 失败: %w", err)
-	}
-	if _, err := exec.LookPath("musl-gcc"); err != nil {
-		return fmt.Errorf("musl-tools 安装后仍未检测到 musl-gcc，请手动安装")
-	}
-	LogInfo("musl-tools 工具链安装完成")
-	return nil
-}
-
 func landlockBinPath() string {
 	return filepath.Join(landlockNativeDir(), "bin", "landlock-run")
 }
@@ -509,13 +388,14 @@ func landlockBinPath() string {
 func buildLandlock() error {
 	state.SetStatus(StatusBuilding, "正在构建 landlock 沙箱组件...")
 	LogInfo("开始编译 landlock 原生沙箱组件")
-	if err := ensureMusl(); err != nil {
+	if err := ensureTool("musl-gcc", "musl-tools"); err != nil {
 		return err
 	}
 	landlockDir := filepath.Join(srcDir, "native", "landlock-run")
 	if _, err := os.Stat(landlockDir); err == nil {
 		if err := runCmd(landlockDir, pnpmBin(), "run", "build:native"); err == nil {
 			bin := landlockBinPath()
+			_ = os.Chmod(bin, 0755)
 			LogInfo("landlock 原生沙箱组件构建完成: %s", bin)
 			return nil
 		}
@@ -527,6 +407,7 @@ func buildLandlock() error {
 	if _, err := os.Stat(bin); err != nil {
 		return fmt.Errorf("landlock 构建完成但产物缺失: %s", bin)
 	}
+	_ = os.Chmod(bin, 0755)
 	LogInfo("landlock 原生沙箱组件构建完成: %s", bin)
 	return nil
 }
@@ -534,7 +415,7 @@ func buildLandlock() error {
 // buildFromSource 专用于在线升级拉取或强制重建时的源码编译流程
 func buildFromSource(forceClean bool) error {
 	state.SetStatus(StatusBuilding, "正在准备编译环境...")
-	if err := ensureGCC(); err != nil {
+	if err := ensureTool("gcc", "build-essential"); err != nil {
 		return err
 	}
 	if err := installPnpm(); err != nil {
@@ -560,7 +441,6 @@ func buildFromSource(forceClean bool) error {
 		return err
 	}
 
-	fixPermissions(srcDir)
 	SetBuildTime(time.Now())
 	return nil
 }

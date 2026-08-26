@@ -2,7 +2,19 @@
 
 ### This script is called after the user installs the application.
 
-# 确定数据目录路径
+LOG_FILE="${TRIM_PKGVAR}/info.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] $1" >> ${LOG_FILE}
+}
+
+log_err() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [ERROR] $1" >> ${LOG_FILE}
+}
+
+log_msg "开始执行应用安装初始化回调 (install_callback)..."
+
+# 1. 确定数据目录路径与运行用户
 LIB_TYPE="${wizard_data_library_type:-data}"
 if [ "${LIB_TYPE}" = "data" ]; then
     DATA_LIBRARY_PATH="${TRIM_PKGVAR}"
@@ -10,13 +22,39 @@ else
     DATA_LIBRARY_PATH="${TRIM_DATA_SHARE_PATHS%%:*}"
 fi
 
-TARGET_USER="${wizard_dsh_run_user:-root}"
-if [ "${TARGET_USER}" = "package" ]; then
-    TARGET_USER="deepseek.harness"
+DSH_RUN_USER="${wizard_dsh_run_user:-root}"
+[ "${DSH_RUN_USER}" = "package" ] && DSH_RUN_USER="deepseek.harness"
+
+# 确保日志文件本身对目标运行用户可读写
+if id "${DSH_RUN_USER}" >/dev/null 2>&1 && [ -f "${LOG_FILE}" ]; then
+    chown "${DSH_RUN_USER}" "${LOG_FILE}" 2>/dev/null || true
 fi
 
+log_msg "初始化应用数据目录 (路径=${DATA_LIBRARY_PATH}, 运行用户=${DSH_RUN_USER})..."
+
+# 2. 检查并预安装编译依赖 (gcc 与 musl-gcc)
+MISSING_PKGS=""
+if ! command -v gcc >/dev/null 2>&1; then
+    MISSING_PKGS="${MISSING_PKGS} build-essential"
+fi
+if ! command -v musl-gcc >/dev/null 2>&1; then
+    MISSING_PKGS="${MISSING_PKGS} musl-tools"
+fi
+
+if [ -n "${MISSING_PKGS}" ]; then
+    log_msg "检测到缺少编译依赖 [${MISSING_PKGS# }]，开始自动安装..."
+    apt-get update >> ${LOG_FILE} 2>&1 || true
+    if apt-get install -y --no-install-recommends ${MISSING_PKGS} >> ${LOG_FILE} 2>&1; then
+        log_msg "编译依赖 [${MISSING_PKGS# }] 安装完成。"
+    else
+        log_err "编译依赖 [${MISSING_PKGS# }] 自动安装失败，可稍后在终端手动安装。"
+    fi
+else
+    log_msg "编译依赖环境已就绪 (gcc / musl-gcc 已安装)。"
+fi
+
+# 3. 预创建功能子目录并全量纠偏数据目录属主与权限
 if [ -n "${DATA_LIBRARY_PATH}" ] && [ -d "${DATA_LIBRARY_PATH}" ]; then
-    # 预创建全部功能与缓存子目录
     mkdir -p "${DATA_LIBRARY_PATH}/src" \
              "${DATA_LIBRARY_PATH}/dsh-data" \
              "${DATA_LIBRARY_PATH}/home" \
@@ -25,25 +63,23 @@ if [ -n "${DATA_LIBRARY_PATH}" ] && [ -d "${DATA_LIBRARY_PATH}" ]; then
              "${DATA_LIBRARY_PATH}/npm-cache" \
              "${DATA_LIBRARY_PATH}/plugins"
 
-    # 1. 属主切换：仅递归切换功能子目录
-    if [ "${TARGET_USER}" != "root" ] && id "${TARGET_USER}" >/dev/null 2>&1; then
-        chown -R "${TARGET_USER}" "${DATA_LIBRARY_PATH}/src" \
-                                 "${DATA_LIBRARY_PATH}/dsh-data" \
-                                 "${DATA_LIBRARY_PATH}/home" \
-                                 "${DATA_LIBRARY_PATH}/pnpm-env" \
-                                 "${DATA_LIBRARY_PATH}/pnpm-home" \
-                                 "${DATA_LIBRARY_PATH}/npm-cache" \
-                                 "${DATA_LIBRARY_PATH}/plugins" 2>/dev/null || true
+    if id "${DSH_RUN_USER}" >/dev/null 2>&1; then
+        chown -R "${DSH_RUN_USER}" "${DATA_LIBRARY_PATH}" 2>/dev/null || true
     fi
 
-    # 2. 基础读写执行权限初始化
-    chmod -R u+rwX,g+rX,o+rX "${DATA_LIBRARY_PATH}/src" \
-                             "${DATA_LIBRARY_PATH}/dsh-data" \
-                             "${DATA_LIBRARY_PATH}/home" \
-                             "${DATA_LIBRARY_PATH}/pnpm-env" \
-                             "${DATA_LIBRARY_PATH}/pnpm-home" \
-                             "${DATA_LIBRARY_PATH}/npm-cache" \
-                             "${DATA_LIBRARY_PATH}/plugins" 2>/dev/null || true
+    chmod -R u+rwX,g+rX,o+rX "${DATA_LIBRARY_PATH}" 2>/dev/null || true
 fi
+
+# 4. 清理可能残留的 Unix Socket
+if [ -n "${TRIM_APPDEST}" ]; then
+    rm -f "${TRIM_APPDEST}/web.sock"
+fi
+
+# 确保日志文件本身对目标运行用户可读写
+if id "${DSH_RUN_USER}" >/dev/null 2>&1 && [ -f "${LOG_FILE}" ]; then
+    chown "${DSH_RUN_USER}" "${LOG_FILE}" 2>/dev/null || true
+fi
+
+log_msg "应用安装初始化回调执行完成。"
 
 exit 0

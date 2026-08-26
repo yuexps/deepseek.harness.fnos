@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -38,43 +37,6 @@ func removePidFileIfMatches(pid int) {
 
 func setProcessGroup(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-}
-
-// setProcessGroupAndUser 配置进程组并在需要时以指定用户（如 deepseek.harness）运行
-func setProcessGroupAndUser(cmd *exec.Cmd, runUser string) {
-	attr := &syscall.SysProcAttr{Setpgid: true}
-	if runUser != "" && runUser != "root" {
-		targetUser := runUser
-		if targetUser == "package" {
-			targetUser = "deepseek.harness"
-		}
-		if u, err := user.Lookup(targetUser); err == nil {
-			if uid, err := strconv.ParseUint(u.Uid, 10, 32); err == nil {
-				if gid, err := strconv.ParseUint(u.Gid, 10, 32); err == nil {
-					cred := &syscall.Credential{
-						Uid: uint32(uid),
-						Gid: uint32(gid),
-					}
-					if groupIds, err := u.GroupIds(); err == nil {
-						var gids []uint32
-						for _, g := range groupIds {
-							if gn, err := strconv.ParseUint(g, 10, 32); err == nil {
-								gids = append(gids, uint32(gn))
-							}
-						}
-						if len(gids) > 0 {
-							cred.Groups = gids
-						}
-					}
-					attr.Credential = cred
-					LogInfo("配置 DSH 服务主进程以「%s」用户 (UID=%d, GID=%d, 组=%v) 运行", u.Username, uid, gid, cred.Groups)
-				}
-			}
-		} else {
-			LogWarning("系统查询用户 %q 失败: %s", targetUser, err)
-		}
-	}
-	cmd.SysProcAttr = attr
 }
 
 func isProcessAlive(pid int) bool {
