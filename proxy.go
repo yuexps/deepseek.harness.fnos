@@ -239,6 +239,12 @@ func proxyWithAuth(next http.Handler) http.Handler {
 			return
 		}
 
+		// 放行公开静态元数据（避免 PWA 清单与图标因浏览器默认无凭证请求而触发登录页拦截）
+		if r.URL.Path == "/manifest.webmanifest" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon.ico" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// 校验 cookie
 		if !isValidAuthCookie(r, pwd) {
 			serveLoginPage(w, isLocked, lockRemaining, remainingAttempts)

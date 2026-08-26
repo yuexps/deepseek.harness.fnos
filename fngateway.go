@@ -26,6 +26,7 @@ var gatewayStatusPageTpl = template.Must(template.New("gateway_status").Parse(ga
 const fnGatewayPrefix = "/app/deepseek-harness/fngateway"
 
 var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action)=(["'])(/[^"']*)`)
+var manifestLinkRegex = regexp.MustCompile(`(?i)<link\b[^>]*\brel=["']manifest["'][^>]*>`)
 
 // InitFnGateway 注册飞牛网关直连代理路由
 func InitFnGateway(base *gin.RouterGroup) {
@@ -77,6 +78,14 @@ func handleFnGateway(c *gin.Context) {
 				resp.Header.Set("Location", rewriteGatewayLocation(loc))
 			}
 
+			// 改写 Cookie 作用域路径
+			if cookies := resp.Header.Values("Set-Cookie"); len(cookies) > 0 {
+				resp.Header.Del("Set-Cookie")
+				for _, ck := range cookies {
+					resp.Header.Add("Set-Cookie", rewriteGatewayCookie(ck))
+				}
+			}
+
 			// 优化流式响应标头
 			if strings.HasPrefix(contentType, "text/event-stream") {
 				resp.Header.Set("Cache-Control", "no-cache, no-transform")
@@ -97,6 +106,19 @@ func handleFnGateway(c *gin.Context) {
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+			}
+
+			// 拦截并改写 PWA Web App Manifest 的子路径作用域
+			if (strings.Contains(contentType, "manifest+json") || (resp.Request != nil && strings.HasSuffix(resp.Request.URL.Path, ".webmanifest"))) && resp.Body != nil {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err == nil {
+					modified := rewriteGatewayManifest(bodyBytes)
+					resp.Body = io.NopCloser(bytes.NewReader(modified))
+					resp.ContentLength = int64(len(modified))
+					resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+					resp.Header.Set("Content-Type", "application/manifest+json; charset=utf-8")
+				}
 			}
 
 			// 拦截 JS 资源改写回环状态判定
@@ -149,6 +171,42 @@ func rewriteGatewayLocation(loc string) string {
 	return fnGatewayPrefix + loc
 }
 
+// rewriteGatewayCookie 重写 Cookie 作用域路径
+func rewriteGatewayCookie(ck string) string {
+	if strings.Contains(ck, "Path=/;") || strings.HasSuffix(ck, "Path=/") {
+		ck = strings.Replace(ck, "Path=/;", "Path="+fnGatewayPrefix+"/;", 1)
+		if strings.HasSuffix(ck, "Path=/") {
+			ck = strings.TrimSuffix(ck, "Path=/") + "Path=" + fnGatewayPrefix + "/"
+		}
+	}
+	return ck
+}
+
+// rewriteGatewayManifest 改写 PWA Web App Manifest 中的 scope, start_url 与图标子路径
+func rewriteGatewayManifest(body []byte) []byte {
+	var manifest map[string]any
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return body
+	}
+	manifest["scope"] = fnGatewayPrefix + "/"
+	manifest["start_url"] = fnGatewayPrefix + "/"
+	manifest["id"] = fnGatewayPrefix + "/"
+	if icons, ok := manifest["icons"].([]any); ok {
+		for _, ic := range icons {
+			if icMap, ok := ic.(map[string]any); ok {
+				if src, ok := icMap["src"].(string); ok && strings.HasPrefix(src, "/") && !strings.HasPrefix(src, fnGatewayPrefix) {
+					icMap["src"] = fnGatewayPrefix + src
+				}
+			}
+		}
+	}
+	newBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return body
+	}
+	return newBytes
+}
+
 // rewriteFnGatewayHtml 改写静态资源标签并注入补丁脚本
 func rewriteFnGatewayHtml(body []byte) []byte {
 	// 正则替换属性路径
@@ -166,6 +224,14 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 		}
 		newPath := fnGatewayPrefix + path
 		return fmt.Appendf(nil, "%s=%s%s", attr, quote, newPath)
+	})
+
+	// 确保 manifest 标签携带凭证发起请求，避免被飞牛 OS 网关鉴权拦截返回 invalid token
+	modified = manifestLinkRegex.ReplaceAllFunc(modified, func(match []byte) []byte {
+		if !bytes.Contains(bytes.ToLower(match), []byte("crossorigin")) {
+			return bytes.Replace(match, []byte("<link"), []byte("<link crossorigin=\"use-credentials\""), 1)
+		}
+		return match
 	})
 
 	// 注入桥接脚本
@@ -196,38 +262,17 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 func fnGatewayBridgeScript() string {
 	return `<style>[data-slot="settings.action"] { display: none !important; }</style><script>
 (function (prefix) {
-  // 仅在当前页面位于网关前缀下时激活
-  if (typeof window === "undefined" || !window.location || window.location.pathname.indexOf(prefix) !== 0) return;
+  if (typeof window === "undefined" || !window.location) return;
+  if (window.location.pathname.indexOf(prefix) !== 0 && window.location.pathname !== prefix) return;
 
-  // crypto.randomUUID 兼容补丁
-  var cryptoObject = window.crypto;
-  if (cryptoObject && typeof cryptoObject.randomUUID !== "function" && typeof cryptoObject.getRandomValues === "function") {
-    var getRandomValues = cryptoObject.getRandomValues.bind(cryptoObject);
-    var randomUUID = function () {
-      var bytes = new Uint8Array(16);
-      getRandomValues(bytes);
-      bytes[6] = (bytes[6] & 15) | 64;
-      bytes[8] = (bytes[8] & 63) | 128;
-      var hex = Array.from(bytes, function (byte) { return ("0" + byte.toString(16)).slice(-2); }).join("");
-      return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
-    };
-    var installRandomUUID = function (target) {
-      try {
-        Object.defineProperty(target, "randomUUID", { configurable: true, writable: true, value: randomUUID });
-        return typeof target.randomUUID === "function";
-      } catch (_) { return false; }
-    };
-    if (!installRandomUUID(cryptoObject) && Object.getPrototypeOf(cryptoObject)) installRandomUUID(Object.getPrototypeOf(cryptoObject));
-  }
-
-  // 全同源路由重写器
   var isAlreadyPrefixed = function (pathname) {
     return prefix !== "" && (pathname === prefix || pathname.indexOf(prefix + "/") === 0);
   };
+
   var toGatewayUrl = function (value) {
     if (!value) return null;
-    var str = String(value);
-    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0) return null;
+    var str = String(value).trim();
+    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0 || str.indexOf("about:") === 0) return null;
     var url;
     try { url = new URL(str, window.location.href); }
     catch (_) { return null; }
@@ -239,240 +284,429 @@ func fnGatewayBridgeScript() string {
     return url;
   };
 
-  // 拦截 Fetch API
-  var nativeFetch = window.fetch.bind(window);
-  window.fetch = function (input, init) {
-    if (typeof Request !== "undefined" && input instanceof Request) {
-      var mapped = toGatewayUrl(input.url);
-      if (mapped !== null) input = new Request(mapped.toString(), input);
-    } else {
-      var mapped = toGatewayUrl(input);
-      if (mapped !== null) input = mapped.toString();
-    }
-    return nativeFetch(input, init);
+  var toGatewaySrcset = function (srcsetStr) {
+    if (!srcsetStr || typeof srcsetStr !== "string") return srcsetStr;
+    return srcsetStr.split(",").map(function (part) {
+      var item = part.trim();
+      if (!item) return item;
+      var segs = item.split(/\s+/);
+      var mapped = toGatewayUrl(segs[0]);
+      if (mapped !== null) segs[0] = mapped.toString();
+      return segs.join(" ");
+    }).join(", ");
   };
 
-  // 拦截 XMLHttpRequest
-  if (window.XMLHttpRequest) {
-    var nativeXHROpen = window.XMLHttpRequest.prototype.open;
-    window.XMLHttpRequest.prototype.open = function (method, url) {
-      var mapped = toGatewayUrl(url);
-      if (mapped !== null) {
-        arguments[1] = mapped.toString();
-      }
-      return nativeXHROpen.apply(this, arguments);
-    };
-  }
-
-  // 拦截 DOM 资源节点动态插入
-  var rewriteElementNode = function (node) {
-    if (!node || node.nodeType !== 1) return;
-    var tag = node.tagName;
-    if (tag === "SCRIPT" || tag === "IMG" || tag === "IFRAME" || tag === "AUDIO" || tag === "VIDEO") {
-      var src = node.getAttribute("src") || node.src;
-      var mapped = toGatewayUrl(src);
-      if (mapped !== null) node.setAttribute("src", mapped.toString());
-    } else if (tag === "LINK" || tag === "A") {
-      var href = node.getAttribute("href") || node.href;
-      var mapped = toGatewayUrl(href);
-      if (mapped !== null) {
-        node.setAttribute("href", mapped.toString());
-        if (node.href) node.href = mapped.toString();
-      }
-    }
+  var rewriteHtmlString = function (html) {
+    if (typeof html !== "string" || html.indexOf("/") === -1) return html;
+    var htmlAttrRe = new RegExp("\\b(src|href|action)=([\"'])(/[^\"']*)\\2", "gi");
+    return html.replace(htmlAttrRe, function (match, attr, quote, path) {
+      if (isAlreadyPrefixed(path) || path.indexOf("//") === 0) return match;
+      return attr + "=" + quote + prefix + path + quote;
+    });
   };
 
-  // 拦截 window.open 弹出与下载
-  if (typeof window.open === "function") {
-    var nativeWindowOpen = window.open.bind(window);
-    window.open = function (url, target, features) {
-      var mapped = toGatewayUrl(url);
-      return nativeWindowOpen(mapped !== null ? mapped.toString() : url, target, features);
-    };
-  }
+  var installBridge = function (targetWindow) {
+    if (!targetWindow || targetWindow.__fnGatewayBridgeReady) return;
+    targetWindow.__fnGatewayBridgeReady = true;
 
-  // 拦截 <a> 标签动态下载与跳转
-  if (typeof HTMLAnchorElement !== "undefined") {
-    var anchorProto = HTMLAnchorElement.prototype;
-    var hrefDesc = Object.getOwnPropertyDescriptor(anchorProto, "href");
-    if (hrefDesc && hrefDesc.set) {
-      var nativeHrefSet = hrefDesc.set;
-      Object.defineProperty(anchorProto, "href", {
+    // crypto.randomUUID 兼容补丁
+    var cryptoObject = targetWindow.crypto;
+    if (cryptoObject && typeof cryptoObject.randomUUID !== "function" && typeof cryptoObject.getRandomValues === "function") {
+      var getRandomValues = cryptoObject.getRandomValues.bind(cryptoObject);
+      var randomUUID = function () {
+        var bytes = new Uint8Array(16);
+        getRandomValues(bytes);
+        bytes[6] = (bytes[6] & 15) | 64;
+        bytes[8] = (bytes[8] & 63) | 128;
+        var hex = Array.from(bytes, function (byte) { return ("0" + byte.toString(16)).slice(-2); }).join("");
+        return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+      };
+      var installRandomUUID = function (target) {
+        try {
+          Object.defineProperty(target, "randomUUID", { configurable: true, writable: true, value: randomUUID });
+          return typeof target.randomUUID === "function";
+        } catch (_) { return false; }
+      };
+      if (!installRandomUUID(cryptoObject) && Object.getPrototypeOf(cryptoObject)) installRandomUUID(Object.getPrototypeOf(cryptoObject));
+    }
+
+    // 拦截 Fetch API
+    if (targetWindow.fetch) {
+      var nativeFetch = targetWindow.fetch.bind(targetWindow);
+      targetWindow.fetch = function (input, init) {
+        if (typeof Request !== "undefined" && input instanceof Request) {
+          var mapped = toGatewayUrl(input.url);
+          if (mapped !== null) {
+            try {
+              input = new Request(mapped.toString(), input);
+            } catch (_) {}
+          }
+        } else {
+          var mapped = toGatewayUrl(input);
+          if (mapped !== null) input = mapped.toString();
+        }
+        return nativeFetch(input, init);
+      };
+    }
+
+    // 拦截 XMLHttpRequest
+    if (targetWindow.XMLHttpRequest) {
+      var nativeXHROpen = targetWindow.XMLHttpRequest.prototype.open;
+      targetWindow.XMLHttpRequest.prototype.open = function (method, url) {
+        var mapped = toGatewayUrl(url);
+        if (mapped !== null) arguments[1] = mapped.toString();
+        return nativeXHROpen.apply(this, arguments);
+      };
+    }
+
+    // 属性描述符 Setter 拦截器
+    var hookProperty = function (proto, prop, isSrcset) {
+      if (!proto) return;
+      var desc = Object.getOwnPropertyDescriptor(proto, prop);
+      if (!desc || !desc.set) return;
+      var nativeSet = desc.set;
+      Object.defineProperty(proto, prop, {
         set: function (val) {
+          if (isSrcset) return nativeSet.call(this, toGatewaySrcset(val));
           var mapped = toGatewayUrl(val);
-          return nativeHrefSet.call(this, mapped !== null ? mapped.toString() : val);
+          return nativeSet.call(this, mapped !== null ? mapped.toString() : val);
         },
-        get: hrefDesc.get,
+        get: desc.get,
         configurable: true,
         enumerable: true
       });
-    }
+    };
 
-    if (anchorProto.click) {
-      var nativeAnchorClick = anchorProto.click;
-      anchorProto.click = function () {
-        var href = this.getAttribute("href") || this.href;
-        var mapped = toGatewayUrl(href);
-        if (mapped !== null) {
-          this.setAttribute("href", mapped.toString());
-          if (this.href) this.href = mapped.toString();
+    // 批量劫持关键 DOM 原型属性
+    if (targetWindow.HTMLImageElement) {
+      hookProperty(targetWindow.HTMLImageElement.prototype, "src", false);
+      hookProperty(targetWindow.HTMLImageElement.prototype, "srcset", true);
+    }
+    if (targetWindow.HTMLLinkElement) hookProperty(targetWindow.HTMLLinkElement.prototype, "href", false);
+    if (targetWindow.HTMLAnchorElement) hookProperty(targetWindow.HTMLAnchorElement.prototype, "href", false);
+    if (targetWindow.HTMLIFrameElement) hookProperty(targetWindow.HTMLIFrameElement.prototype, "src", false);
+    if (targetWindow.HTMLMediaElement) hookProperty(targetWindow.HTMLMediaElement.prototype, "src", false);
+    if (targetWindow.HTMLSourceElement) {
+      hookProperty(targetWindow.HTMLSourceElement.prototype, "src", false);
+      hookProperty(targetWindow.HTMLSourceElement.prototype, "srcset", true);
+    }
+    if (targetWindow.HTMLTrackElement) hookProperty(targetWindow.HTMLTrackElement.prototype, "src", false);
+    if (targetWindow.HTMLInputElement) hookProperty(targetWindow.HTMLInputElement.prototype, "src", false);
+    if (targetWindow.HTMLFormElement) hookProperty(targetWindow.HTMLFormElement.prototype, "action", false);
+    if (targetWindow.HTMLObjectElement) hookProperty(targetWindow.HTMLObjectElement.prototype, "data", false);
+    if (targetWindow.HTMLEmbedElement) hookProperty(targetWindow.HTMLEmbedElement.prototype, "src", false);
+
+    // 拦截 setAttribute 与 setAttributeNS
+    if (targetWindow.Element) {
+      var nativeSetAttr = targetWindow.Element.prototype.setAttribute;
+      targetWindow.Element.prototype.setAttribute = function (name, value) {
+        var n = String(name).toLowerCase();
+        var tag = (this.tagName || "").toUpperCase();
+        if (n === "src" || n === "href" || n === "action" || (n === "data" && tag === "OBJECT")) {
+          var mapped = toGatewayUrl(value);
+          if (mapped !== null) value = mapped.toString();
+        } else if (n === "srcset") {
+          value = toGatewaySrcset(value);
         }
-        return nativeAnchorClick.apply(this, arguments);
+        return nativeSetAttr.call(this, name, value);
       };
-    }
-  }
 
-  // 全局捕获点击 <a> 标签
-  window.addEventListener("click", function (e) {
-    var target = e.target;
-    while (target && target.tagName !== "A") {
-      target = target.parentElement;
-    }
-    if (target && target.tagName === "A") {
-      var href = target.getAttribute("href") || target.href;
-      var mapped = toGatewayUrl(href);
-      if (mapped !== null) {
-        target.setAttribute("href", mapped.toString());
-        if (target.href) target.href = mapped.toString();
-      }
-    }
-  }, true);
-  var nativeAppend = Element.prototype.append;
-  if (nativeAppend) {
-    Element.prototype.append = function () {
-      for (var i = 0; i < arguments.length; i++) rewriteElementNode(arguments[i]);
-      return nativeAppend.apply(this, arguments);
-    };
-  }
-  var nativeAppendChild = Node.prototype.appendChild;
-  Node.prototype.appendChild = function (node) {
-    rewriteElementNode(node);
-    return nativeAppendChild.call(this, node);
-  };
-  var nativeInsertBefore = Node.prototype.insertBefore;
-  Node.prototype.insertBefore = function (node, reference) {
-    rewriteElementNode(node);
-    return nativeInsertBefore.call(this, node, reference);
-  };
-
-  // 拦截 EventSource 流式连接
-  var nativeEventSource = window.EventSource;
-  if (nativeEventSource) {
-    window.EventSource = new Proxy(nativeEventSource, {
-      construct: function (target, args, newTarget) {
-        var mapped = toGatewayUrl(args[0]);
-        if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
-        return Reflect.construct(target, args, newTarget);
-      }
-    });
-  }
-
-  // 拦截 WebSocket 连接
-  var nativeWebSocket = window.WebSocket;
-  if (nativeWebSocket) {
-    var page = new URL(window.location.href);
-    var pagePort = page.port || (page.protocol === "https:" ? "443" : "80");
-    window.WebSocket = new Proxy(nativeWebSocket, {
-      construct: function (target, args, newTarget) {
-        var url;
-        try { url = new URL(String(args[0]), window.location.href); }
-        catch (_) { return Reflect.construct(target, args, newTarget); }
-        var socketPort = url.port || (url.protocol === "wss:" ? "443" : "80");
-        if ((url.protocol === "ws:" || url.protocol === "wss:") &&
-            url.hostname === page.hostname && socketPort === pagePort &&
-            !isAlreadyPrefixed(url.pathname)) {
-          var rawPath = url.pathname.indexOf('/') === 0 ? url.pathname : '/' + url.pathname;
-          url.pathname = prefix + rawPath;
-          args = [url.toString()].concat(args.slice(1));
-        }
-        return Reflect.construct(target, args, newTarget);
-      }
-    });
-  }
-
-  // 拦截 navigator.sendBeacon
-  if (navigator && typeof navigator.sendBeacon === "function") {
-    var nativeSendBeacon = navigator.sendBeacon.bind(navigator);
-    navigator.sendBeacon = function (url, data) {
-      var mapped = toGatewayUrl(url);
-      return nativeSendBeacon(mapped !== null ? mapped.toString() : url, data);
-    };
-  }
-
-  // 拦截 Web Worker 脚本路径
-  if (window.Worker) {
-    var nativeWorker = window.Worker;
-    window.Worker = new Proxy(nativeWorker, {
-      construct: function (target, args, newTarget) {
-        var mapped = toGatewayUrl(args[0]);
-        if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
-        return Reflect.construct(target, args, newTarget);
-      }
-    });
-  }
-
-  // DSH 客户端回环状态与配置持久化兼容补丁
-  var hookModuleLoader = function (loader) {
-    if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
-    var rawLoad = loader.load.bind(loader);
-    loader.load = function (handoff) {
-      if (handoff && handoff.id === "@deepseek-ai/dsh-client-connection" && typeof handoff.factory === "function") {
-        var rawFactory = handoff.factory;
-        handoff.factory = function () {
-          var modExports = rawFactory.apply(this, arguments);
-          if (modExports && typeof modExports.apply === "function") {
-            var rawApply = modExports.apply;
-            modExports.apply = function (ctx) {
-              if (ctx && typeof ctx.provide === "function") {
-                var proxyCtx = new Proxy(ctx, {
-                  get: function (target, prop, receiver) {
-                    if (prop === "provide") {
-                      return function (name, handle) {
-                        if (name === "connection" && handle && typeof handle === "object") {
-                          try {
-                            Object.defineProperty(handle, "isLoopback", {
-                              value: true,
-                              writable: true,
-                              configurable: true
-                            });
-                          } catch (_) {
-                            handle.isLoopback = true;
-                          }
-                        }
-                        return Reflect.apply(target.provide, target, arguments);
-                      };
-                    }
-                    return Reflect.get(target, prop, receiver);
-                  }
-                });
-                return rawApply.call(this, proxyCtx);
-              }
-              return rawApply.apply(this, arguments);
-            };
+      if (targetWindow.Element.prototype.setAttributeNS) {
+        var nativeSetAttrNS = targetWindow.Element.prototype.setAttributeNS;
+        targetWindow.Element.prototype.setAttributeNS = function (ns, name, value) {
+          var n = String(name).toLowerCase();
+          var tag = (this.tagName || "").toUpperCase();
+          if (n === "src" || n === "href" || n === "action" || (n === "data" && tag === "OBJECT") || n.indexOf("href") !== -1) {
+            var mapped = toGatewayUrl(value);
+            if (mapped !== null) value = mapped.toString();
           }
-          return modExports;
+          return nativeSetAttrNS.call(this, ns, name, value);
         };
       }
-      return rawLoad(handoff);
+
+      // 拦截 innerHTML 与 insertAdjacentHTML
+      var innerDesc = Object.getOwnPropertyDescriptor(targetWindow.Element.prototype, "innerHTML");
+      if (innerDesc && innerDesc.set) {
+        var nativeInnerSet = innerDesc.set;
+        Object.defineProperty(targetWindow.Element.prototype, "innerHTML", {
+          set: function (val) {
+            return nativeInnerSet.call(this, rewriteHtmlString(val));
+          },
+          get: innerDesc.get,
+          configurable: true,
+          enumerable: true
+        });
+      }
+
+      if (targetWindow.Element.prototype.insertAdjacentHTML) {
+        var nativeInsertAdjHTML = targetWindow.Element.prototype.insertAdjacentHTML;
+        targetWindow.Element.prototype.insertAdjacentHTML = function (pos, html) {
+          return nativeInsertAdjHTML.call(this, pos, rewriteHtmlString(html));
+        };
+      }
+    }
+
+    // 拦截 <a> 标签点击
+    targetWindow.addEventListener("click", function (e) {
+      var target = e.target;
+      while (target && target.tagName !== "A") {
+        target = target.parentElement;
+      }
+      if (target && target.tagName === "A") {
+        var href = target.getAttribute("href") || target.href;
+        var mapped = toGatewayUrl(href);
+        if (mapped !== null) {
+          target.setAttribute("href", mapped.toString());
+          if (target.href) target.href = mapped.toString();
+        }
+      }
+    }, true);
+
+    // 拦截 DOM 节点动态插入并自动穿透同源 iframe
+    var injectIframe = function (iframeEl) {
+      try {
+        if (!iframeEl || iframeEl.__bridgeHooked) return;
+        iframeEl.__bridgeHooked = true;
+        var hookWin = function () {
+          try {
+            var win = iframeEl.contentWindow;
+            if (win && win !== targetWindow) {
+              installBridge(win);
+            }
+          } catch (_) {}
+        };
+        iframeEl.addEventListener("load", hookWin);
+        hookWin();
+      } catch (_) {}
     };
-    loader.__hooked = true;
-    return loader;
-  };
-  if (window.__ModuleLoader__) {
-    hookModuleLoader(window.__ModuleLoader__);
-  } else {
-    var storedLoader = undefined;
-    try {
-      Object.defineProperty(window, "__ModuleLoader__", {
-        configurable: true,
-        enumerable: true,
-        get: function () { return storedLoader; },
-        set: function (val) {
-          storedLoader = hookModuleLoader(val);
+
+    var rewriteElementNode = function (node) {
+      if (!node || node.nodeType !== 1) return;
+      var tag = node.tagName;
+      if (tag === "SCRIPT" || tag === "IMG" || tag === "IFRAME" || tag === "AUDIO" || tag === "VIDEO" || tag === "EMBED") {
+        var rawAttr = node.getAttribute("src");
+        if (rawAttr && !isAlreadyPrefixed(rawAttr)) {
+          var mapped = toGatewayUrl(rawAttr);
+          if (mapped !== null) node.setAttribute("src", mapped.toString());
+        } else if (!rawAttr && node.src && !isAlreadyPrefixed(node.src)) {
+          var mapped = toGatewayUrl(node.src);
+          if (mapped !== null) node.src = mapped.toString();
+        }
+        if (tag === "IFRAME") injectIframe(node);
+      } else if (tag === "LINK" || tag === "A") {
+        if (tag === "LINK" && (node.rel === "manifest" || node.getAttribute("rel") === "manifest")) {
+          if (!node.hasAttribute("crossorigin")) node.setAttribute("crossorigin", "use-credentials");
+        }
+        var rawHref = node.getAttribute("href");
+        if (rawHref && !isAlreadyPrefixed(rawHref)) {
+          var mapped = toGatewayUrl(rawHref);
+          if (mapped !== null) {
+            node.setAttribute("href", mapped.toString());
+            if (node.href) node.href = mapped.toString();
+          }
+        }
+      } else if (tag === "OBJECT") {
+        var data = node.getAttribute("data") || node.data;
+        if (data && !isAlreadyPrefixed(data)) {
+          var mapped = toGatewayUrl(data);
+          if (mapped !== null) node.setAttribute("data", mapped.toString());
+        }
+      } else if (tag === "FORM") {
+        var action = node.getAttribute("action") || node.action;
+        if (action && !isAlreadyPrefixed(action)) {
+          var mapped = toGatewayUrl(action);
+          if (mapped !== null) node.setAttribute("action", mapped.toString());
+        }
+      }
+    };
+
+    if (targetWindow.Element && targetWindow.Element.prototype.append) {
+      var nativeAppend = targetWindow.Element.prototype.append;
+      targetWindow.Element.prototype.append = function () {
+        for (var i = 0; i < arguments.length; i++) rewriteElementNode(arguments[i]);
+        return nativeAppend.apply(this, arguments);
+      };
+    }
+    if (targetWindow.Node) {
+      var nativeAppendChild = targetWindow.Node.prototype.appendChild;
+      targetWindow.Node.prototype.appendChild = function (node) {
+        rewriteElementNode(node);
+        return nativeAppendChild.call(this, node);
+      };
+      var nativeInsertBefore = targetWindow.Node.prototype.insertBefore;
+      targetWindow.Node.prototype.insertBefore = function (node, reference) {
+        rewriteElementNode(node);
+        return nativeInsertBefore.call(this, node, reference);
+      };
+    }
+
+    // 拦截 SPA 路由 History API
+    if (targetWindow.history) {
+      var wrapHistory = function (orig) {
+        if (!orig) return orig;
+        return function (state, unused, url) {
+          if (url) {
+            var mapped = toGatewayUrl(url);
+            if (mapped !== null) url = mapped.toString();
+          }
+          return orig.call(this, state, unused, url);
+        };
+      };
+      targetWindow.history.pushState = wrapHistory(targetWindow.history.pushState);
+      targetWindow.history.replaceState = wrapHistory(targetWindow.history.replaceState);
+    }
+
+    // 拦截 EventSource 流式连接
+    if (targetWindow.EventSource) {
+      var nativeEventSource = targetWindow.EventSource;
+      targetWindow.EventSource = new Proxy(nativeEventSource, {
+        construct: function (target, args, newTarget) {
+          var mapped = toGatewayUrl(args[0]);
+          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
+          return Reflect.construct(target, args, newTarget);
         }
       });
-    } catch (_) {}
-  }
+    }
+
+    // 拦截 WebSocket 连接
+    if (targetWindow.WebSocket) {
+      var nativeWebSocket = targetWindow.WebSocket;
+      var page = new URL(targetWindow.location.href);
+      var pagePort = page.port || (page.protocol === "https:" ? "443" : "80");
+      targetWindow.WebSocket = new Proxy(nativeWebSocket, {
+        construct: function (target, args, newTarget) {
+          var url;
+          try { url = new URL(String(args[0]), targetWindow.location.href); }
+          catch (_) { return Reflect.construct(target, args, newTarget); }
+          var socketPort = url.port || (url.protocol === "wss:" ? "443" : "80");
+          if ((url.protocol === "ws:" || url.protocol === "wss:") &&
+              url.hostname === page.hostname && socketPort === pagePort &&
+              !isAlreadyPrefixed(url.pathname)) {
+            var rawPath = url.pathname.indexOf('/') === 0 ? url.pathname : '/' + url.pathname;
+            url.pathname = prefix + rawPath;
+            args = [url.toString()].concat(args.slice(1));
+          }
+          return Reflect.construct(target, args, newTarget);
+        }
+      });
+    }
+
+    // 拦截 navigator.sendBeacon
+    if (targetWindow.navigator && typeof targetWindow.navigator.sendBeacon === "function") {
+      var nativeSendBeacon = targetWindow.navigator.sendBeacon.bind(targetWindow.navigator);
+      targetWindow.navigator.sendBeacon = function (url, data) {
+        var mapped = toGatewayUrl(url);
+        return nativeSendBeacon(mapped !== null ? mapped.toString() : url, data);
+      };
+    }
+
+    // 拦截 window.open
+    if (typeof targetWindow.open === "function") {
+      var nativeWindowOpen = targetWindow.open.bind(targetWindow);
+      targetWindow.open = function (url, target, features) {
+        var mapped = toGatewayUrl(url);
+        return nativeWindowOpen(mapped !== null ? mapped.toString() : url, target, features);
+      };
+    }
+
+    // 拦截 Worker 与 SharedWorker
+    if (targetWindow.Worker) {
+      var nativeWorker = targetWindow.Worker;
+      targetWindow.Worker = new Proxy(nativeWorker, {
+        construct: function (target, args, newTarget) {
+          var mapped = toGatewayUrl(args[0]);
+          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
+          return Reflect.construct(target, args, newTarget);
+        }
+      });
+    }
+    if (targetWindow.SharedWorker) {
+      var nativeSharedWorker = targetWindow.SharedWorker;
+      targetWindow.SharedWorker = new Proxy(nativeSharedWorker, {
+        construct: function (target, args, newTarget) {
+          var mapped = toGatewayUrl(args[0]);
+          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
+          return Reflect.construct(target, args, newTarget);
+        }
+      });
+    }
+    if (targetWindow.navigator && targetWindow.navigator.serviceWorker && typeof targetWindow.navigator.serviceWorker.register === "function") {
+      var nativeSWRegister = targetWindow.navigator.serviceWorker.register.bind(targetWindow.navigator.serviceWorker);
+      targetWindow.navigator.serviceWorker.register = function (scriptURL, options) {
+        var mapped = toGatewayUrl(scriptURL);
+        if (mapped !== null) scriptURL = mapped.toString();
+        if (options && options.scope) {
+          var scopeMapped = toGatewayUrl(options.scope);
+          if (scopeMapped !== null) options.scope = scopeMapped.pathname;
+        }
+        return nativeSWRegister(scriptURL, options);
+      };
+    }
+
+    // DSH 客户端回环状态与配置持久化兼容补丁
+    var hookModuleLoader = function (loader) {
+      if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
+      var rawLoad = loader.load.bind(loader);
+      loader.load = function (handoff) {
+        if (handoff && handoff.id === "@deepseek-ai/dsh-client-connection" && typeof handoff.factory === "function") {
+          var rawFactory = handoff.factory;
+          handoff.factory = function () {
+            var modExports = rawFactory.apply(this, arguments);
+            if (modExports && typeof modExports.apply === "function") {
+              var rawApply = modExports.apply;
+              modExports.apply = function (ctx) {
+                if (ctx && typeof ctx.provide === "function") {
+                  var proxyCtx = new Proxy(ctx, {
+                    get: function (target, prop, receiver) {
+                      if (prop === "provide") {
+                        return function (name, handle) {
+                          if (name === "connection" && handle && typeof handle === "object") {
+                            try {
+                              Object.defineProperty(handle, "isLoopback", {
+                                value: true,
+                                writable: true,
+                                configurable: true
+                              });
+                            } catch (_) {
+                              handle.isLoopback = true;
+                            }
+                          }
+                          return Reflect.apply(target.provide, target, arguments);
+                        };
+                      }
+                      return Reflect.get(target, prop, receiver);
+                    }
+                  });
+                  return rawApply.call(this, proxyCtx);
+                }
+                return rawApply.apply(this, arguments);
+              };
+            }
+            return modExports;
+          };
+        }
+        return rawLoad(handoff);
+      };
+      loader.__hooked = true;
+      return loader;
+    };
+
+    if (targetWindow.__ModuleLoader__) {
+      hookModuleLoader(targetWindow.__ModuleLoader__);
+    } else {
+      var storedLoader = undefined;
+      try {
+        Object.defineProperty(targetWindow, "__ModuleLoader__", {
+          configurable: true,
+          enumerable: true,
+          get: function () { return storedLoader; },
+          set: function (val) { storedLoader = hookModuleLoader(val); }
+        });
+      } catch (_) {}
+    }
+  };
+
+  installBridge(window);
 })("` + fnGatewayPrefix + `");
 </script>`
 }

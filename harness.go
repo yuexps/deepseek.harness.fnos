@@ -295,7 +295,7 @@ func startLocked() error {
 		port = 2298
 	}
 
-	bin, args := dshCliCmd("web", "--port", fmt.Sprintf("%d", port))
+	bin, args := dshCliCmd("web", "--port", fmt.Sprintf("%d", port), "--no-open")
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = srcDir
 	cmd.Stdout = NewLogWriterInfo()
