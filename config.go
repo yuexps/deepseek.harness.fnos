@@ -59,7 +59,6 @@ func InitAppEnv(pkgVar string) {
 	storeDir := filepath.Join(pnpmHome, "store")
 	_ = os.Setenv("PNPM_HOME", pnpmHome)
 	_ = os.Setenv("pnpm_config_store_dir", storeDir)
-	_ = os.Setenv("npm_config_store_dir", storeDir)
 	_ = os.Setenv("npm_config_cache", filepath.Join(pkgVar, "npm-cache"))
 	_ = os.Setenv("npm_config_registry", "https://registry.npmmirror.com")
 	_ = os.Setenv("NPM_CONFIG_REGISTRY", "https://registry.npmmirror.com")
