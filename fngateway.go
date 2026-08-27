@@ -25,7 +25,7 @@ var gatewayStatusPageTpl = template.Must(template.New("gateway_status").Parse(ga
 
 const fnGatewayPrefix = "/app/deepseek-harness/fngateway"
 
-var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action)\s*=\s*(["'])(/[^"']*)`)
+var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action|poster)\s*=\s*(["'])(/[^"']*)`)
 var manifestLinkRegex = regexp.MustCompile(`(?i)<link\b[^>]*\brel=["']manifest["'][^>]*>`)
 var cookiePathRegex = regexp.MustCompile(`(?i)\bpath\s*=\s*/(;|$)`)
 
@@ -259,7 +259,7 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 
 // fnGatewayBridgeScript 生成前端运行时拦截补丁脚本
 func fnGatewayBridgeScript() string {
-	return `<style>[data-slot="settings.action"] { display: none !important; }</style><script>
+	return `<base href="` + fnGatewayPrefix + `/"><style>[data-slot="settings.action"] { display: none !important; }</style><script>
 (function (prefix) {
   if (typeof window === "undefined" || !window.location) return;
   if (window.location.pathname.indexOf(prefix) !== 0 && window.location.pathname !== prefix) return;
@@ -271,7 +271,7 @@ func fnGatewayBridgeScript() string {
   var toGatewayUrl = function (value) {
     if (!value) return null;
     var str = String(value).trim();
-    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0 || str.indexOf("about:") === 0) return null;
+    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0 || str.indexOf("about:") === 0 || str.indexOf("#") === 0) return null;
     var url;
     try { url = new URL(str, window.location.href); }
     catch (_) { return null; }
@@ -297,7 +297,7 @@ func fnGatewayBridgeScript() string {
 
   var rewriteHtmlString = function (html) {
     if (typeof html !== "string" || html.indexOf("/") === -1) return html;
-    var htmlAttrRe = new RegExp("\\b(src|href|action)=([\"'])(/[^\"']*)\\2", "gi");
+    var htmlAttrRe = new RegExp("\\b(src|href|action|poster)=([\"'])(/[^\"']*)\\2", "gi");
     return html.replace(htmlAttrRe, function (match, attr, quote, path) {
       if (isAlreadyPrefixed(path) || path.indexOf("//") === 0) return match;
       return attr + "=" + quote + prefix + path + quote;
@@ -307,6 +307,53 @@ func fnGatewayBridgeScript() string {
   var installBridge = function (targetWindow) {
     if (!targetWindow || targetWindow.__fnGatewayBridgeReady) return;
     targetWindow.__fnGatewayBridgeReady = true;
+
+    // 拦截 Location 原型（pathname、assign、replace）
+    if (targetWindow.Location && targetWindow.Location.prototype) {
+      var locProto = targetWindow.Location.prototype;
+      var locPathDesc = Object.getOwnPropertyDescriptor(locProto, "pathname");
+      if (locPathDesc && locPathDesc.get && locPathDesc.configurable) {
+        var nativeLocPathGet = locPathDesc.get;
+        var nativeLocPathSet = locPathDesc.set;
+        try {
+          Object.defineProperty(locProto, "pathname", {
+            get: function () {
+              var p = nativeLocPathGet.call(this);
+              if (isAlreadyPrefixed(p)) {
+                var stripped = p.slice(prefix.length);
+                return stripped.indexOf("/") === 0 ? stripped : "/" + stripped;
+              }
+              return p;
+            },
+            set: function (val) {
+              if (nativeLocPathSet) {
+                if (typeof val === "string" && val.indexOf("/") === 0 && !isAlreadyPrefixed(val)) {
+                  val = prefix + val;
+                }
+                return nativeLocPathSet.call(this, val);
+              }
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (_) {}
+      }
+
+      if (locProto.assign) {
+        var nativeAssign = locProto.assign;
+        locProto.assign = function (url) {
+          var mapped = toGatewayUrl(url);
+          return nativeAssign.call(this, mapped !== null ? mapped.toString() : url);
+        };
+      }
+      if (locProto.replace) {
+        var nativeReplace = locProto.replace;
+        locProto.replace = function (url) {
+          var mapped = toGatewayUrl(url);
+          return nativeReplace.call(this, mapped !== null ? mapped.toString() : url);
+        };
+      }
+    }
 
     // crypto.randomUUID 兼容补丁
     var cryptoObject = targetWindow.crypto;
@@ -385,6 +432,9 @@ func fnGatewayBridgeScript() string {
     if (targetWindow.HTMLAnchorElement) hookProperty(targetWindow.HTMLAnchorElement.prototype, "href", false);
     if (targetWindow.HTMLIFrameElement) hookProperty(targetWindow.HTMLIFrameElement.prototype, "src", false);
     if (targetWindow.HTMLMediaElement) hookProperty(targetWindow.HTMLMediaElement.prototype, "src", false);
+    if (targetWindow.HTMLVideoElement) {
+      hookProperty(targetWindow.HTMLVideoElement.prototype, "poster", false);
+    }
     if (targetWindow.HTMLSourceElement) {
       hookProperty(targetWindow.HTMLSourceElement.prototype, "src", false);
       hookProperty(targetWindow.HTMLSourceElement.prototype, "srcset", true);
@@ -401,7 +451,7 @@ func fnGatewayBridgeScript() string {
       targetWindow.Element.prototype.setAttribute = function (name, value) {
         var n = String(name).toLowerCase();
         var tag = (this.tagName || "").toUpperCase();
-        if (n === "src" || n === "href" || n === "action" || (n === "data" && tag === "OBJECT")) {
+        if (n === "src" || n === "href" || n === "action" || n === "poster" || (n === "data" && tag === "OBJECT")) {
           var mapped = toGatewayUrl(value);
           if (mapped !== null) value = mapped.toString();
         } else if (n === "srcset") {
@@ -415,7 +465,7 @@ func fnGatewayBridgeScript() string {
         targetWindow.Element.prototype.setAttributeNS = function (ns, name, value) {
           var n = String(name).toLowerCase();
           var tag = (this.tagName || "").toUpperCase();
-          if (n === "src" || n === "href" || n === "action" || (n === "data" && tag === "OBJECT") || n.indexOf("href") !== -1) {
+          if (n === "src" || n === "href" || n === "action" || n === "poster" || (n === "data" && tag === "OBJECT") || n.indexOf("href") !== -1) {
             var mapped = toGatewayUrl(value);
             if (mapped !== null) value = mapped.toString();
           }
@@ -490,6 +540,13 @@ func fnGatewayBridgeScript() string {
         } else if (!rawAttr && node.src && !isAlreadyPrefixed(node.src)) {
           var mapped = toGatewayUrl(node.src);
           if (mapped !== null) node.src = mapped.toString();
+        }
+        if (tag === "VIDEO" && node.hasAttribute("poster")) {
+          var rawPoster = node.getAttribute("poster");
+          if (rawPoster && !isAlreadyPrefixed(rawPoster)) {
+            var mappedPoster = toGatewayUrl(rawPoster);
+            if (mappedPoster !== null) node.setAttribute("poster", mappedPoster.toString());
+          }
         }
         if (tag === "IFRAME") injectIframe(node);
       } else if (tag === "LINK" || tag === "A") {

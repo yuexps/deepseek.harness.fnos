@@ -111,12 +111,14 @@ if (window.__ModuleLoader__) {
 
 ### 3. 网关全同源路由拦截器（子路径无感路由与防逃逸）
 在 [`fngateway.go`](./fngateway.go) 中，通过全维度拦截封堵前端全部网络与渲染通道：
+- **`<base href="...">` 标签注入**：自动在 HTML 头部插入子路径基准，对齐相对路径资源解析基准；
+- **`Location.prototype` 原型拦截**：重写 `pathname` Getter/Setter（读取时透明剥除前缀，设置时自动补全）以及 `assign` / `replace` 编程式跳转，防止路由状态误判与跳转逃逸；
 - **`window.fetch`**：自动改写同源绝对路径 URL（支持 Request 实例与字符串，具备容错降级）；
 - **`XMLHttpRequest.prototype.open`**：重写 Ajax 请求路径；
-- **`HTMLImageElement` / `HTMLMediaElement` / `HTMLSourceElement` 等原型 Property Setter**：拦截图片与媒体资源的 `src`、`srcset` 等赋值，解决赋值瞬间即刻触发原生网络请求的问题；
+- **`HTMLImageElement` / `HTMLVideoElement` / `HTMLMediaElement` / `HTMLSourceElement` 等原型 Property Setter**：拦截图片与媒体资源的 `src`、`srcset`、`poster` 等赋值，解决赋值瞬间即刻触发原生网络请求的问题；
 - **`<script>` 脚本精准挂载拦截**：保持 `HTMLScriptElement.prototype.src` 原生状态，在 `appendChild` / `insertBefore` 挂载 DOM 时单次改写，确保与 DSH `client-modules` 模块加载器的注册时序严格同步；
-- **`Element.prototype.setAttribute` / `setAttributeNS`**：精准重写动态设置的 `src`、`href`、`srcset` 等属性（`data` 属性限定 `<object>` 标签，防止误伤业务属性）；
-- **`Element.prototype.innerHTML` / `insertAdjacentHTML`**：正则解析替换 HTML 字符串内的相对资源路径；
+- **`Element.prototype.setAttribute` / `setAttributeNS`**：精准重写动态设置的 `src`、`href`、`action`、`poster`、`srcset` 等属性（`data` 属性限定 `<object>` 标签，防止误伤业务属性）；
+- **`Element.prototype.innerHTML` / `insertAdjacentHTML`**：正则解析替换 HTML 字符串内的相对资源路径（支持 `src`、`href`、`action`、`poster`）；
 - **`history.pushState` / `replaceState`**：防止 SPA 路由跳转覆盖子路径前缀导致刷新 404；
 - **同源 `<iframe>` 穿透挂载**：动态挂载的同源 iframe 自动递归初始化拦截桥接脚本；
 - **`window.WebSocket` / `EventSource`**：重写 WebSocket 握手与 SSE 流式连接路径；
