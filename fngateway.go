@@ -25,8 +25,9 @@ var gatewayStatusPageTpl = template.Must(template.New("gateway_status").Parse(ga
 
 const fnGatewayPrefix = "/app/deepseek-harness/fngateway"
 
-var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action)=(["'])(/[^"']*)`)
+var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action)\s*=\s*(["'])(/[^"']*)`)
 var manifestLinkRegex = regexp.MustCompile(`(?i)<link\b[^>]*\brel=["']manifest["'][^>]*>`)
+var cookiePathRegex = regexp.MustCompile(`(?i)\bpath\s*=\s*/(;|$)`)
 
 // InitFnGateway 注册飞牛网关直连代理路由
 func InitFnGateway(base *gin.RouterGroup) {
@@ -96,6 +97,10 @@ func handleFnGateway(c *gin.Context) {
 
 			// 改写页面标签并注入补丁脚本
 			if strings.Contains(contentType, "text/html") && resp.Body != nil {
+				// 移除 CSP 标头，避免阻断注入的网关适配脚本执行
+				resp.Header.Del("Content-Security-Policy")
+				resp.Header.Del("Content-Security-Policy-Report-Only")
+
 				bodyBytes, err := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 				if err != nil {
@@ -173,13 +178,7 @@ func rewriteGatewayLocation(loc string) string {
 
 // rewriteGatewayCookie 重写 Cookie 作用域路径
 func rewriteGatewayCookie(ck string) string {
-	if strings.Contains(ck, "Path=/;") || strings.HasSuffix(ck, "Path=/") {
-		ck = strings.Replace(ck, "Path=/;", "Path="+fnGatewayPrefix+"/;", 1)
-		if strings.HasSuffix(ck, "Path=/") {
-			ck = strings.TrimSuffix(ck, "Path=/") + "Path=" + fnGatewayPrefix + "/"
-		}
-	}
-	return ck
+	return cookiePathRegex.ReplaceAllString(ck, "Path="+fnGatewayPrefix+"/$1")
 }
 
 // rewriteGatewayManifest 改写 PWA Web App Manifest 中的 scope, start_url 与图标子路径
@@ -538,6 +537,20 @@ func fnGatewayBridgeScript() string {
         rewriteElementNode(node);
         return nativeInsertBefore.call(this, node, reference);
       };
+    }
+
+    if (targetWindow.MutationObserver) {
+      var observer = new MutationObserver(function (mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+          var nodes = mutations[i].addedNodes;
+          for (var j = 0; j < nodes.length; j++) {
+            if (nodes[j].tagName === "IFRAME") injectIframe(nodes[j]);
+          }
+        }
+      });
+      if (targetWindow.document && targetWindow.document.documentElement) {
+        observer.observe(targetWindow.document.documentElement, { childList: true, subtree: true });
+      }
     }
 
     // 拦截 SPA 路由 History API
