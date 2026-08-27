@@ -11,6 +11,7 @@ import (
 type Config struct {
 	ServerPort      int    `json:"server_port"`
 	ProxyPort       int    `json:"proxy_port"`
+	HeapMemoryLimit int    `json:"heap_memory_limit,omitempty"`
 	NetworkProxy    string `json:"network_proxy"`
 	AccessMode      string `json:"access_mode,omitempty"`
 	ReverseProxyURL string `json:"reverse_proxy_url,omitempty"`

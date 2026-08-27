@@ -144,6 +144,7 @@ export interface LogData {
 export interface SettingsConfig {
   server_port: number
   proxy_port: number
+  heap_memory_limit?: number
   network_proxy: string
   access_mode?: 'fngateway' | 'port' | 'custom'
   reverse_proxy_url: string

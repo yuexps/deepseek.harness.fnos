@@ -7,6 +7,7 @@ export const useConfigStore = defineStore('config', () => {
   const config = ref<SettingsConfig>({
     server_port: 2298,
     proxy_port: 2299,
+    heap_memory_limit: 0,
     network_proxy: '',
     access_mode: 'fngateway',
     reverse_proxy_url: '',
@@ -26,6 +27,7 @@ export const useConfigStore = defineStore('config', () => {
     return (
       config.value.server_port !== savedConfig.value.server_port ||
       config.value.proxy_port !== savedConfig.value.proxy_port ||
+      (config.value.heap_memory_limit ?? 0) !== (savedConfig.value.heap_memory_limit ?? 0) ||
       (config.value.access_mode || 'fngateway') !== (savedConfig.value.access_mode || 'fngateway') ||
       (config.value.network_proxy || '') !== (savedConfig.value.network_proxy || '') ||
       (config.value.reverse_proxy_url || '') !== (savedConfig.value.reverse_proxy_url || '') ||
@@ -43,6 +45,12 @@ export const useConfigStore = defineStore('config', () => {
   const isProxyPortChanged = computed(() => {
     if (!savedConfig.value) return false
     return config.value.proxy_port !== savedConfig.value.proxy_port
+  })
+
+  // 堆内存上限是否变更
+  const isHeapMemoryChanged = computed(() => {
+    if (!savedConfig.value) return false
+    return (config.value.heap_memory_limit ?? 0) !== (savedConfig.value.heap_memory_limit ?? 0)
   })
 
   // 放弃修改，还原为当前已保存的服务器配置
@@ -65,6 +73,7 @@ export const useConfigStore = defineStore('config', () => {
         if (!data.access_mode) {
           data.access_mode = data.reverse_proxy_url ? 'custom' : 'fngateway'
         }
+        data.heap_memory_limit = data.heap_memory_limit ?? 0
         config.value = { ...data }
         savedConfig.value = { ...data }
         configLoaded.value = true
@@ -108,6 +117,7 @@ export const useConfigStore = defineStore('config', () => {
     isChanged,
     isServerPortChanged,
     isProxyPortChanged,
+    isHeapMemoryChanged,
     fetchConfig,
     saveConfig,
     resetConfig

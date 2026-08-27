@@ -508,6 +508,7 @@ func handleSaveConfig(c *gin.Context) {
 	oldCfg := GetConfig()
 	serverPortChanged := oldCfg.ServerPort != cfg.ServerPort
 	proxyPortChanged := oldCfg.ProxyPort != cfg.ProxyPort
+	heapMemChanged := oldCfg.HeapMemoryLimit != cfg.HeapMemoryLimit
 
 	if serverPortChanged {
 		if err := checkPortAvailable(cfg.ServerPort); err != nil {
@@ -533,12 +534,19 @@ func handleSaveConfig(c *gin.Context) {
 
 	if serverPortChanged {
 		if state.Status() == StatusRunning {
-			LogInfo("服务端口已变更 (%d → %d)，正在自动重启服务", oldCfg.ServerPort, cfg.ServerPort)
+			LogInfo("内部监听端口已变更 (%d → %d)，正在自动重启服务", oldCfg.ServerPort, cfg.ServerPort)
 			go func() {
 				_ = Restart()
 			}()
 		} else {
 			restartReverseProxy()
+		}
+	} else if heapMemChanged {
+		if state.Status() == StatusRunning {
+			LogInfo("堆内存上限已变更 (%dG → %dG)，正在自动重启服务", oldCfg.HeapMemoryLimit, cfg.HeapMemoryLimit)
+			go func() {
+				_ = Restart()
+			}()
 		}
 	} else if proxyPortChanged {
 		restartReverseProxy()

@@ -257,9 +257,15 @@ func Start() error {
 
 // dshCliCmd 优先直接执行编译后的 CLI 入口，其次解析 package.json，失败时以 pnpm 兜底
 func dshCliCmd(subArgs ...string) (string, []string) {
+	cfg := GetConfig()
+	var v8Args []string
+	if cfg.HeapMemoryLimit > 0 {
+		v8Args = append(v8Args, fmt.Sprintf("--max-old-space-size=%d", cfg.HeapMemoryLimit*1024))
+	}
+
 	cliBinJs := filepath.Join(srcDir, "apps", "cli", "lib", "bin.js")
 	if _, err := os.Stat(cliBinJs); err == nil {
-		return nodeBin(), append([]string{cliBinJs}, subArgs...)
+		return nodeBin(), append(append(v8Args, cliBinJs), subArgs...)
 	}
 
 	pkgPath := filepath.Join(srcDir, "package.json")
@@ -272,7 +278,7 @@ func dshCliCmd(subArgs ...string) (string, []string) {
 				parts := strings.Fields(script)
 				if len(parts) > 0 && (parts[0] == "tsx" || parts[0] == "node") {
 					cmdArgs := append([]string{}, parts[1:]...)
-					return nodeBin(), append(cmdArgs, subArgs...)
+					return nodeBin(), append(append(v8Args, cmdArgs...), subArgs...)
 				}
 			}
 		}
@@ -301,6 +307,14 @@ func startLocked() error {
 	cmd.Stdout = NewLogWriterInfo()
 	cmd.Stderr = NewLogWriterWarn()
 	setProcessGroup(cmd)
+
+	if cfg.HeapMemoryLimit > 0 {
+		nodeOpt := fmt.Sprintf("--max-old-space-size=%d", cfg.HeapMemoryLimit*1024)
+		if existingOpt := os.Getenv("NODE_OPTIONS"); existingOpt != "" {
+			nodeOpt = existingOpt + " " + nodeOpt
+		}
+		cmd.Env = append(os.Environ(), "NODE_OPTIONS="+nodeOpt)
+	}
 
 	if err := cmd.Start(); err != nil {
 		state.SetStatus(StatusStopped, "启动失败: "+err.Error())

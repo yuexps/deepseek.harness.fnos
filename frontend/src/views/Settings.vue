@@ -87,8 +87,51 @@
                 </n-form-item>
               </n-gi>
 
-              <!-- 第二行：模式选择 反代密码 -->
+              <!-- 第二行：堆内存上限 反代密码 -->
               <n-gi span="2 m:1">
+                <n-form-item label="堆内存上限" path="heap_memory_limit">
+                  <template #label>
+                    <div class="flex items-center gap-1.5">
+                      <span>堆内存上限 (Heap Memory)</span>
+                      <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                        <template #trigger>
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                            <Help />
+                          </n-icon>
+                        </template>
+                        Node.js 核心服务最大堆内存限制 (--max-old-space-size)，若分析超大项目发生内存溢出时可调高。
+                      </n-tooltip>
+                    </div>
+                  </template>
+                  <n-select v-model:value="config.heap_memory_limit" :options="heapMemoryOptions"
+                    placeholder="自动 (系统默认)" />
+                </n-form-item>
+              </n-gi>
+
+              <n-gi span="2 m:1">
+                <n-form-item label="访问控制密码" path="access_password">
+                  <template #label>
+                    <div class="flex items-center gap-1.5">
+                      <span>反代访问密码</span>
+                      <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                        <template #trigger>
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                            <Help />
+                          </n-icon>
+                        </template>
+                        反向代理端口的访问密码，留空则不开启访问校验
+                      </n-tooltip>
+                    </div>
+                  </template>
+                  <n-input type="password" show-password-on="click" v-model:value="config.access_password"
+                    placeholder="留空则不启用密码保护" autocomplete="new-password" />
+                </n-form-item>
+              </n-gi>
+
+              <!-- 第三行：打开方式选择 -->
+              <n-gi span="2">
                 <n-form-item label="打开方式选择" path="access_mode">
                   <template #label>
                     <div class="flex items-center gap-1.5">
@@ -115,27 +158,6 @@
                       自定义地址
                     </n-radio-button>
                   </n-radio-group>
-                </n-form-item>
-              </n-gi>
-
-              <n-gi span="2 m:1">
-                <n-form-item label="访问控制密码" path="access_password">
-                  <template #label>
-                    <div class="flex items-center gap-1.5">
-                      <span>反代访问密码</span>
-                      <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
-                        <template #trigger>
-                          <n-icon size="14"
-                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
-                            <Help />
-                          </n-icon>
-                        </template>
-                        反向代理端口的访问密码，留空则不开启访问校验
-                      </n-tooltip>
-                    </div>
-                  </template>
-                  <n-input type="password" show-password-on="click" v-model:value="config.access_password"
-                    placeholder="留空则不启用密码保护" autocomplete="new-password" />
                 </n-form-item>
               </n-gi>
 
@@ -221,6 +243,7 @@ import {
   NGi,
   NInput,
   NInputNumber,
+  NSelect,
   NRadioGroup,
   NRadioButton,
   NEmpty,
@@ -254,8 +277,19 @@ const {
   lastErrorMessage,
   configLoaded,
   isChanged,
-  isServerPortChanged
+  isServerPortChanged,
+  isHeapMemoryChanged
 } = storeToRefs(configStore)
+
+// 堆内存上限下拉选项 (GB)
+const heapMemoryOptions = [
+  { label: '自动 (系统默认)', value: 0 },
+  { label: '2 GB', value: 2 },
+  { label: '4 GB', value: 4 },
+  { label: '6 GB', value: 6 },
+  { label: '8 GB', value: 8 },
+  { label: '10 GB', value: 10 }
+]
 
 watch(isChanged, (changed) => {
   if (changed) {
@@ -364,11 +398,21 @@ async function handleSave() {
     return
   }
 
-  // 内部监听端口变更且服务处于运行中时二次确认
-  if (isServerPortChanged.value && systemStore.isRunning) {
+  // 内部监听端口或堆内存上限变更且服务处于运行中时二次确认
+  if ((isServerPortChanged.value || isHeapMemoryChanged.value) && systemStore.isRunning) {
+    const changes: string[] = []
+    if (isServerPortChanged.value) {
+      changes.push(`内部监听端口已由 ${savedConfig.value?.server_port || 2298} 变更为 ${config.value.server_port}`)
+    }
+    if (isHeapMemoryChanged.value) {
+      const oldMem = savedConfig.value?.heap_memory_limit ? `${savedConfig.value.heap_memory_limit} GB` : '自动'
+      const newMem = config.value.heap_memory_limit ? `${config.value.heap_memory_limit} GB` : '自动'
+      changes.push(`堆内存上限已由 ${oldMem} 变更为 ${newMem}`)
+    }
+
     dialog.warning({
       title: '确认保存并重启核心服务？',
-      content: `检测到内部监听端口已由 ${savedConfig.value?.server_port || 2298} 变更为 ${config.value.server_port}。保存设置后，系统将自动重启 DeepSeek Harness 后端进程以应用新端口。当前所有正在执行的任务可能会短暂中断，是否确认继续？`,
+      content: `检测到${changes.join('，')}。保存设置后，系统将自动重启 DeepSeek Harness 后端进程以应用新配置。当前所有正在执行的任务可能会短暂中断，是否确认继续？`,
       positiveText: '保存并重启',
       negativeText: '取消',
       onPositiveClick: async () => {

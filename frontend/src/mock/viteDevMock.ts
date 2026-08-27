@@ -16,6 +16,7 @@ export function viteDevMock(): Plugin {
       const config = {
         server_port: 2298,
         proxy_port: 2299,
+        heap_memory_limit: 0,
         network_proxy: '',
         access_mode: 'fngateway',
         reverse_proxy_url: '',
