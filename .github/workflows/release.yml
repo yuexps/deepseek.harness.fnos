@@ -571,22 +571,23 @@ jobs:
             exit 0
           fi
 
-          # 1. 计算安装包大小 (MB, 保留一位小数，以 x86 为准)
-          APP_SIZE=$(ls -l --block-size=1 "${{ env.BIN_NAME }}-x86.fpk" | awk '{printf "%.1f", $5/1024/1024}')
+          # 计算安装包字节大小与 sha256
+          X86_SIZE=$(stat -c %s "${{ env.BIN_NAME }}-x86.fpk")
+          ARM_SIZE=$(stat -c %s "${{ env.BIN_NAME }}-arm.fpk")
+          X86_SHA256=$(sha256sum "${{ env.BIN_NAME }}-x86.fpk" | awk '{print $1}')
+          ARM_SHA256=$(sha256sum "${{ env.BIN_NAME }}-arm.fpk" | awk '{print $1}')
           
-          # 2. 构造下载链接
+          # 构造下载链接
           X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86.fpk"
           ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm.fpk"
           
-          # 3. 待同步更新的目标仓库列表
+          # 待同步更新的目标仓库列表
           TARGET_REPOS=("yuexps/FnDepot")
 
           for REPO in "${TARGET_REPOS[@]}"; do
             echo "----------------------------------------"
             echo "Processing: $REPO"
             REPO_DIR="repo_$(echo "$REPO" | tr '/' '_')"
-            
-            echo "Updating $REPO -> Version: $VERSION, Size: $APP_SIZE"
             
             git clone "https://x-access-token:${GH_PAT}@github.com/${REPO}.git" "$REPO_DIR" || {
               echo "::warning::Clone $REPO failed, skipping."
@@ -597,14 +598,27 @@ jobs:
             
             if [ -f "fnpack.json" ]; then
               jq --arg ver "$VERSION" \
-                 --arg size "$APP_SIZE" \
                  --arg x86_url "$X86_URL" \
+                 --arg x86_sha "$X86_SHA256" \
+                 --argjson x86_size "$X86_SIZE" \
                  --arg arm_url "$ARM_URL" \
+                 --arg arm_sha "$ARM_SHA256" \
+                 --argjson arm_size "$ARM_SIZE" \
                  '
-                 .["deepseek.harness"].version = $ver |
-                 .["deepseek.harness"].size = $size |
-                 .["deepseek.harness"].arch_diff.x86.download_url = $x86_url |
-                 .["deepseek.harness"].arch_diff.arm.download_url = $arm_url
+                 .apps["deepseek.harness"].releases[$ver] = {
+                   "packages": {
+                     "x86": {
+                       "download_url": $x86_url,
+                       "sha256": $x86_sha,
+                       "size": $x86_size
+                     },
+                     "arm": {
+                       "download_url": $arm_url,
+                       "sha256": $arm_sha,
+                       "size": $arm_size
+                     }
+                   }
+                 }
                  ' fnpack.json > fnpack.json.tmp && mv fnpack.json.tmp fnpack.json
                  
               git config user.name "github-actions[bot]"
