@@ -129,23 +129,120 @@ var (
 	pkgVarDir string
 )
 
+// isRuntimeReady 校验工作区产物与依赖是否完备
+func isRuntimeReady() bool {
+	if fi, err := os.Stat(srcDir); err != nil || !fi.IsDir() {
+		return false
+	}
+	if fi, err := os.Stat(filepath.Join(srcDir, "package.json")); err != nil || fi.IsDir() {
+		return false
+	}
+	cliBin := filepath.Join(srcDir, "apps", "cli", "lib", "bin.js")
+	fi, err := os.Stat(cliBin)
+	if err != nil || fi.Size() == 0 {
+		return false
+	}
+	if fi, err := os.Stat(filepath.Join(srcDir, "node_modules")); err != nil || !fi.IsDir() {
+		return false
+	}
+	return true
+}
+
+// PackageFingerprint 记录已部署安装包的静态指纹
+type PackageFingerprint struct {
+	Version string `json:"version"`
+	ModTime int64  `json:"mod_time"`
+	Size    int64  `json:"size"`
+}
+
+func deployedFingerprintPath() string {
+	return filepath.Join(pkgVarDir, ".deployed_pkg")
+}
+
+func readDeployedFingerprint() (PackageFingerprint, bool) {
+	data, err := os.ReadFile(deployedFingerprintPath())
+	if err != nil {
+		return PackageFingerprint{}, false
+	}
+	var stamp PackageFingerprint
+	if err := json.Unmarshal(data, &stamp); err != nil {
+		return PackageFingerprint{}, false
+	}
+	return stamp, true
+}
+
+func writeDeployedFingerprint(ver string, fi os.FileInfo) {
+	stamp := PackageFingerprint{
+		Version: ver,
+		ModTime: fi.ModTime().Unix(),
+		Size:    fi.Size(),
+	}
+	data, err := json.Marshal(stamp)
+	if err == nil {
+		_ = os.WriteFile(deployedFingerprintPath(), data, 0644)
+	}
+}
+
+// EvaluateDeploymentPolicy 综合判定是否需要解压预构建包
+func EvaluateDeploymentPolicy(tarPath string) (shouldDeploy bool, isUpgrade bool, reason string) {
+	fi, err := os.Stat(tarPath)
+	if err != nil {
+		return false, false, "内置离线包不存在"
+	}
+
+	zipVer := readAppDestVersion()
+	installedVer := readVersion()
+	stamp, hasStamp := readDeployedFingerprint()
+	pkgChanged := !hasStamp || stamp.ModTime != fi.ModTime().Unix() || stamp.Size != fi.Size() || stamp.Version != zipVer
+
+	// 工作区不完整时自愈解压
+	if !isRuntimeReady() {
+		return true, false, fmt.Sprintf("运行环境未就绪或产物缺失，正在部署预构建包 (v%s)...", zipVer)
+	}
+
+	// 本地高版本保护，防止降级
+	if zipVer != "" && installedVer != "" && CompareSemver(zipVer, installedVer) < 0 {
+		return false, false, fmt.Sprintf("本地运行版本 (v%s) 高于内置安装包 (v%s)，保留本地版本", installedVer, zipVer)
+	}
+
+	// 安装包版本升级
+	if zipVer != "" && installedVer != "" && CompareSemver(zipVer, installedVer) > 0 {
+		return true, true, fmt.Sprintf("检测到新版本安装包 (v%s → v%s)，正在升级部署...", installedVer, zipVer)
+	}
+
+	// 同版本特征变更覆盖
+	if pkgChanged {
+		return true, true, fmt.Sprintf("检测到安装包文件更新 (v%s)，正在重新同步部署...", zipVer)
+	}
+
+	// 状态一致，跳过解压
+	return false, false, fmt.Sprintf("内置包版本 (v%s) 与当前运行状态一致，跳过解压", zipVer)
+}
+
 // deployPrebuilt 部署内置离线包并启动服务
 func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 	state.SetStatus(StatusBuilding, "正在准备部署预构建包...")
 	go func() {
 		installedVer := readVersion()
 		if isUpgrade {
-			state.SetStatus(StatusBuilding, fmt.Sprintf("正在增量部署预构建包 (v%s → v%s)...", installedVer, zipVer))
-			LogInfo("检测到新版本预构建包 (v%s → v%s)，开始增量解压部署: %s", installedVer, zipVer, tarPath)
+			state.SetStatus(StatusBuilding, fmt.Sprintf("正在升级部署预构建包 (v%s → v%s)...", installedVer, zipVer))
+			LogInfo("检测到新版本预构建包 (v%s → v%s)，正在安全部署: %s", installedVer, zipVer, tarPath)
 		} else {
 			state.SetStatus(StatusBuilding, "正在解压部署内置预构建包...")
-			LogInfo("初次安装解压预构建包: %s (版本: v%s)", tarPath, zipVer)
+			LogInfo("解压部署预构建包: %s (版本: v%s)", tarPath, zipVer)
 		}
+
+		// 解压前物理清空，杜绝残留
+		_ = safeRemoveAll(srcDir)
 
 		if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
 			LogWarning("解压部署预构建包失败: %s", err)
 			state.SetStatus(StatusStopped, "解压离线安装包失败: "+err.Error())
 			return
+		}
+
+		if fi, err := os.Stat(tarPath); err == nil {
+			writeDeployedFingerprint(zipVer, fi)
 		}
 
 		if err := installPnpm(); err != nil {
@@ -173,14 +270,17 @@ func InitHarness(pkgVar, appdest string) {
 	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
 	zipVer := readAppDestVersion()
 
-	// 1. 首次安装或源码损坏：isSourceValid() 为 false
-	if !isSourceValid() {
-		if _, err := os.Stat(tarPath); err == nil {
-			_ = safeRemoveAll(srcDir)
-			deployPrebuilt(tarPath, zipVer, false)
+	// 1. 评估预构建包部署决策
+	if _, err := os.Stat(tarPath); err == nil {
+		shouldDeploy, isUpgrade, reason := EvaluateDeploymentPolicy(tarPath)
+		if shouldDeploy {
+			LogInfo("%s", reason)
+			deployPrebuilt(tarPath, zipVer, isUpgrade)
 			return
 		}
-		// 未内置压缩包时，通过 Git 克隆源码并编译启动
+		LogInfo("%s", reason)
+	} else if !isSourceValid() {
+		// 未内置压缩包且本地无源码时，通过 Git 克隆源码并编译启动
 		state.SetStatus(StatusBuilding, "未检测到内置预构建包，正在从远程克隆源码...")
 		LogInfo("未检测到内置预构建包 (%s)，开始通过 Git 克隆源码: %s", tarPath, repoURL)
 		go func() {
@@ -205,17 +305,7 @@ func InitHarness(pkgVar, appdest string) {
 		return
 	}
 
-	// 2. FPK 包升级：检查内置预构建包版本是否高于当前安装版本
-	if _, err := os.Stat(tarPath); err == nil {
-		installedVer := readVersion()
-		if zipVer != "" && CompareSemver(zipVer, installedVer) > 0 {
-			deployPrebuilt(tarPath, zipVer, true)
-			return
-		}
-		LogInfo("内置预构建包版本 (v%s) 未高于已安装版本 (v%s)，跳过解压", zipVer, installedVer)
-	}
-
-	// 3. 常规启动：直接刷新版本并按上次状态自启
+	// 2. 常规启动：直接刷新版本并按上次状态自启
 	refreshCommit()
 	go func() {
 		_ = installPnpm()
@@ -245,11 +335,8 @@ func Start() error {
 	if state.Status() == StatusRunning {
 		return fmt.Errorf("服务已在运行中")
 	}
-	if !isSourceValid() {
-		return fmt.Errorf("运行环境未就绪或关键文件缺失")
-	}
-	if _, err := os.Stat(filepath.Join(srcDir, "node_modules")); os.IsNotExist(err) {
-		return fmt.Errorf("依赖未安装或文件缺失")
+	if !isRuntimeReady() {
+		return fmt.Errorf("运行环境未就绪或关键构建产物缺失")
 	}
 
 	return startLocked()

@@ -193,25 +193,7 @@ func repairEnvironment() {
 	LogInfo("开始执行恢复出厂设置（清理第三方插件与挂载，保留 API 凭据与配置）")
 
 	zipVer := readAppDestVersion()
-	LogInfo("检测到内置离线包 (%s，版本: v%s)，开始解压部署", tarPath, zipVer)
-	_ = safeRemoveAll(srcDir)
-	if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
-		LogWarning("解压离线包失败: %s", err)
-		state.SetStatus(StatusStopped, "解压离线包失败: "+err.Error())
-		return
-	}
-
-	if err := installPnpm(); err != nil {
-		LogWarning("初始化 pnpm 运行环境失败: %s", err)
-	}
-
-	refreshCommit()
-	SetBuildTime(time.Now())
-	state.SetStatus(StatusStopped, "")
-	LogInfo("出厂状态恢复完成，正在启动服务")
-	if err := Start(); err != nil {
-		LogWarning("服务启动失败: %s", err)
-	}
+	deployPrebuilt(tarPath, zipVer, false)
 }
 
 // formatGitError 根据实际错误特征返回精准的状态提示（在确认网络受阻时引导配置代理）
@@ -259,6 +241,7 @@ func update(forceRebuild bool) {
 	if forceRebuild {
 		state.SetStatus(StatusBuilding, "正在准备强制重建（恢复完整源码环境并重新安装依赖全量编译）...")
 		_ = gitCmd("-C", srcDir, "reset", "--hard", "HEAD").Run()
+		_ = gitCmd("-C", srcDir, "clean", "-fdx", "-e", "node_modules").Run()
 	} else {
 		commitBefore := gitHead()
 		versionBefore := readVersion()
@@ -332,6 +315,12 @@ func gitPull() error {
 	if err := resetCmd.Run(); err != nil {
 		return fmt.Errorf("git reset: %w", err)
 	}
+
+	// 清理未跟踪的历史生成物，保留依赖缓存
+	cleanCmd := gitCmd("-C", srcDir, "clean", "-fdx", "-e", "node_modules")
+	cleanCmd.Stdout = NewLogWriterInfo()
+	cleanCmd.Stderr = NewLogWriterWarn()
+	_ = cleanCmd.Run()
 	return nil
 }
 
@@ -430,6 +419,9 @@ func buildFromSource(forceClean bool) error {
 	if err := runCmd(srcDir, pnpmBin(), pnpmArgs...); err != nil {
 		return fmt.Errorf("pnpm install: %w", err)
 	}
+
+	// 清理历史项目引用产物与构建缓存
+	_ = runCmd(srcDir, pnpmBin(), "run", "clean")
 
 	state.SetStatus(StatusBuilding, "正在编译项目源码...")
 	if err := runCmd(srcDir, pnpmBin(), "run", "build"); err != nil {
