@@ -20,6 +20,10 @@
 ![应用概览](preview/02b0dcb3-30bc-4e06-bf23-abb1304dd854.png)
 ![功能界面](preview/faed9fbf-1bfe-4108-9bb3-3384a100ace7.png)
 
+## B站视频(求三连！)
+
+[![DeepSeek Harness - 点击观看](https://i1.hdslb.com/bfs/archive/0bdd8fddbf3c8e6bf02d0570c31c340e1f6f199e.jpg@384w_216h_1c.webp)](https://www.bilibili.com/video/BV1bbbe6pEYE)
+
 ---
 
 ## 技术架构
