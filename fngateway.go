@@ -70,8 +70,35 @@ func handleFnGateway(c *gin.Context) {
 			pr.Out.Header.Set("Origin", fmt.Sprintf("http://127.0.0.1:%d", serverPort))
 			pr.Out.Header.Set("Sec-Fetch-Site", "same-origin")
 			pr.Out.Header.Set("Accept-Encoding", "identity")
+
+			// 若访问网关根路径且未携带官方会话 Cookie，自动注入 Launch Token 换取会话
+			if (p == "" || p == "/" || p == "/index.html") && !hasDshAuthCookie(c.Request.Header.Get("Cookie")) {
+				if token := GetCurrentLaunchToken(); token != "" && !pr.Out.URL.Query().Has("token") {
+					q := pr.Out.URL.Query()
+					q.Set("token", token)
+					pr.Out.URL.RawQuery = q.Encode()
+				}
+			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
+			// 拦截 401 鉴权失败，若具备新 Token 则自动重定向刷新换票
+			if resp.StatusCode == http.StatusUnauthorized {
+				if token := GetCurrentLaunchToken(); token != "" {
+					bodyBytes, err := io.ReadAll(resp.Body)
+					_ = resp.Body.Close()
+					if err == nil && strings.Contains(string(bodyBytes), "dsh web authentication required") {
+						resp.StatusCode = http.StatusSeeOther
+						resp.Header.Set("Location", fmt.Sprintf("%s/?token=%s", fnGatewayPrefix, url.QueryEscape(token)))
+						resp.Header.Set("Cache-Control", "no-store")
+						resp.Header.Del("Content-Length")
+						resp.Body = io.NopCloser(bytes.NewReader(nil))
+						resp.ContentLength = 0
+						return nil
+					}
+					resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				}
+			}
+
 			contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 
 			// 改写重定向地址

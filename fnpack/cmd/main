@@ -32,7 +32,7 @@ start_process() {
         return 0
     fi
 
-    log_msg "正在启动 deepseek.harness 应用进程 (CMD=${CMD}, DATA_LIBRARY_PATH=${DATA_LIBRARY_PATH})..."
+    log_msg "正在启动 deepseek.harness 应用进程 (CMD=${CMD}, DATA_LIBRARY_PATH=${DATA_LIBRARY_PATH}, DSH_RUN_USER=${DSH_RUN_USER})..."
     if [ "${DSH_RUN_USER}" != "root" ] && id "${DSH_RUN_USER}" >/dev/null 2>&1; then
         su -s /bin/bash "${DSH_RUN_USER}" -c "${CMD}" &
     else

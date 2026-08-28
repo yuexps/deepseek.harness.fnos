@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -373,8 +375,60 @@ func dshCliCmd(subArgs ...string) (string, []string) {
 	return pnpmBin(), append([]string{"dsh"}, subArgs...)
 }
 
+var (
+	launchTokenMu      sync.RWMutex
+	currentLaunchToken string
+	launchTokenRe      = regexp.MustCompile(`dsh web: .*?[?&]token=([A-Za-z0-9_-]+)`)
+)
+
+func GetCurrentLaunchToken() string {
+	launchTokenMu.RLock()
+	defer launchTokenMu.RUnlock()
+	return currentLaunchToken
+}
+
+func SetCurrentLaunchToken(token string) {
+	launchTokenMu.Lock()
+	currentLaunchToken = strings.TrimSpace(token)
+	launchTokenMu.Unlock()
+	if token != "" {
+		display := token
+		if len(display) > 8 {
+			display = display[:8] + "..."
+		}
+		LogInfo("已捕获 Web 会话令牌: %s", display)
+	}
+}
+
+// tokenCaptureWriter 在向日志系统输出的同时实时提取 Launch Token
+type tokenCaptureWriter struct {
+	inner  *LineLogWriter
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	onLine func(line string)
+}
+
+func (w *tokenCaptureWriter) Write(p []byte) (int, error) {
+	n, err := w.inner.Write(p)
+	w.mu.Lock()
+	w.buf.Write(p)
+	for {
+		b := w.buf.Bytes()
+		idx := bytes.IndexByte(b, '\n')
+		if idx < 0 {
+			break
+		}
+		line := string(b[:idx])
+		w.onLine(line)
+		w.buf.Next(idx + 1)
+	}
+	w.mu.Unlock()
+	return n, err
+}
+
 func startLocked() error {
 	killHarnessLocked()
+	SetCurrentLaunchToken("")
 
 	// 保护敏感凭据文件仅属主可读写 (mode 600)
 	credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
@@ -391,7 +445,14 @@ func startLocked() error {
 	bin, args := dshCliCmd("web", "--port", fmt.Sprintf("%d", port), "--no-open")
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = srcDir
-	cmd.Stdout = NewLogWriterInfo()
+	cmd.Stdout = &tokenCaptureWriter{
+		inner: NewLogWriterInfo(),
+		onLine: func(line string) {
+			if m := launchTokenRe.FindStringSubmatch(line); len(m) > 1 {
+				SetCurrentLaunchToken(m[1])
+			}
+		},
+	}
 	cmd.Stderr = NewLogWriterWarn()
 	setProcessGroup(cmd)
 
@@ -425,6 +486,7 @@ func startLocked() error {
 		current := process
 		if current == mp {
 			process = nil
+			SetCurrentLaunchToken("")
 			removePidFileIfMatches(mp.cmd.Process.Pid)
 			stopReverseProxy()
 

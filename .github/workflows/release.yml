@@ -86,7 +86,7 @@ jobs:
         run: |
           cd /tmp/upstream/deepseek-harness
           pnpm install --no-frozen-lockfile
-          pnpm run build
+          pnpm run build:official
           cd native/landlock-run
           pnpm run build:native
           cd ../..
@@ -258,7 +258,7 @@ jobs:
         run: |
           cd /tmp/upstream/deepseek-harness
           pnpm install --no-frozen-lockfile
-          pnpm run build
+          pnpm run build:official
           cd native/landlock-run
           pnpm run build:native
           cd ../..

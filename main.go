@@ -29,7 +29,11 @@ func main() {
 	}
 
 	InitLogger(pkgVar)
-	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s)", pkgVar, appdest)
+	runUser := os.Getenv("DSH_RUN_USER")
+	if runUser == "" {
+		runUser = "root"
+	}
+	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s, DSH_RUN_USER=%s)", pkgVar, appdest, runUser)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

@@ -423,9 +423,9 @@ func buildFromSource(forceClean bool) error {
 	// 清理历史项目引用产物与构建缓存
 	_ = runCmd(srcDir, pnpmBin(), "run", "clean")
 
-	state.SetStatus(StatusBuilding, "正在编译项目源码...")
-	if err := runCmd(srcDir, pnpmBin(), "run", "build"); err != nil {
-		return fmt.Errorf("pnpm run build: %w", err)
+	state.SetStatus(StatusBuilding, "正在编译项目源码 (official)...")
+	if err := runCmd(srcDir, pnpmBin(), "run", "build:official"); err != nil {
+		return fmt.Errorf("pnpm run build:official: %w", err)
 	}
 	LogInfo("项目源码编译完成")
 

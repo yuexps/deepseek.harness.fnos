@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -124,6 +125,11 @@ func statusPayload() gin.H {
 		port = 2299
 	}
 	appURL := ":" + strconv.Itoa(port) + "/"
+	if status == StatusRunning {
+		if token := GetCurrentLaunchToken(); token != "" {
+			appURL = ":" + strconv.Itoa(port) + "/?token=" + url.QueryEscape(token)
+		}
+	}
 
 	serverPort := cfg.ServerPort
 	if serverPort <= 0 {
