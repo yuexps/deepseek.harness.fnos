@@ -455,7 +455,7 @@ function handleRepairEnvironment() {
               h(
                 'span',
                 { class: 'text-[11px] text-slate-400 dark:text-slate-500' },
-                '适用于在线更新回退；若因插件异常请保持关闭'
+                '若因插件导致服务异常请保持关闭'
               )
             ]),
             h(NSwitch, {

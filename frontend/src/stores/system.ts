@@ -90,20 +90,24 @@ export const useSystemStore = defineStore('system', () => {
 
     // 状态流转完成时自动解除动作锁定
     if (activeAction.value) {
-      if (activeAction.value === 'start') {
-        if (curStatus === 'running' || (oldStatus === 'starting' && curStatus === 'stopped') || (oldStatus === 'building' && curStatus === 'stopped')) {
-          clearActionLock()
-        }
-      } else if (activeAction.value === 'restart') {
-        if (curStatus === 'running' || (oldStatus === 'starting' && curStatus === 'stopped')) {
-          clearActionLock()
-        }
-      } else if (activeAction.value === 'upgrade' || activeAction.value === 'rebuild') {
-        if (curStatus !== 'building') {
-          clearActionLock()
-        }
-      } else if (activeAction.value === 'stop') {
+      const isTransitionToRunning = oldStatus !== 'running' && curStatus === 'running'
+      const isFailedOrStopped = (oldStatus === 'starting' || oldStatus === 'building') && curStatus === 'stopped'
+
+      if (activeAction.value === 'stop') {
         if (curStatus === 'stopped') {
+          clearActionLock()
+        }
+      } else if (activeAction.value === 'start' || activeAction.value === 'restart') {
+        if (isTransitionToRunning || isFailedOrStopped) {
+          clearActionLock()
+        }
+      } else if (
+        activeAction.value === 'upgrade' ||
+        activeAction.value === 'rebuild' ||
+        activeAction.value === 'repair' ||
+        activeAction.value === 'reset'
+      ) {
+        if (isTransitionToRunning || isFailedOrStopped) {
           clearActionLock()
         }
       }

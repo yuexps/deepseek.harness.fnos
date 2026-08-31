@@ -162,31 +162,45 @@
 
     <!-- 发现新版本升级确认弹窗 -->
     <n-modal v-model:show="showUpdateModal" preset="dialog" type="info" title="发现新版本" positive-text="立即更新"
-      negative-text="稍后再说" :loading="isActionLocked" @positive-click="confirmUpgrade"
+      negative-text="暂不更新" :loading="isActionLocked" @positive-click="confirmUpgrade"
       @negative-click="showUpdateModal = false">
-      <div class="space-y-3 my-2">
-        <p class="text-sm text-slate-600 dark:text-slate-300">
-          检测到远程仓库有新版本，是否立即开始更新？
-        </p>
-        <div class="p-3 bg-slate-50 dark:bg-white/[0.04] rounded-xl flex flex-col gap-2 text-xs">
-          <div class="flex items-center justify-between">
-            <span class="text-slate-500">当前版本</span>
-            <span class="font-bold text-slate-700 dark:text-slate-200 font-mono">
+      <div class="space-y-3 pt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+        <!-- 版本信息对比 -->
+        <div
+          class="p-2.5 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-3 font-mono">
+          <div class="flex flex-col gap-0.5 min-w-0">
+            <span class="text-[11px] text-slate-400 dark:text-slate-500 font-sans">当前版本</span>
+            <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs">
               {{ formatVersionDisplay(updateInfo?.current_version || statusData.version, updateInfo?.current_commit ||
                 statusData.commit) }}
             </span>
           </div>
-          <div class="flex items-center justify-between">
-            <span class="text-slate-500">最新版本</span>
-            <span class="font-bold text-blue-600 dark:text-blue-400 font-mono">
+          <div class="text-slate-300 dark:text-slate-600 text-sm font-sans shrink-0">→</div>
+          <div class="flex flex-col gap-0.5 min-w-0 items-end text-right">
+            <span class="text-[11px] text-blue-600 dark:text-blue-400 font-sans font-medium">目标版本</span>
+            <span class="font-semibold text-blue-600 dark:text-blue-400 text-xs">
               {{ formatVersionDisplay(updateInfo?.remote_version || updateInfo?.current_version || statusData.version,
                 updateInfo?.remote_commit) }}
             </span>
           </div>
         </div>
-        <p class="text-xs text-amber-600 dark:text-amber-400">
-          提示：更新将短暂停止服务并重新编译依赖，完成后自动重启。
-        </p>
+
+        <!-- 强警示高危警告区 -->
+        <div class="p-3 rounded-xl bg-rose-500/[0.08] dark:bg-rose-500/[0.15] border border-rose-500/30 space-y-1.5">
+          <div class="font-bold text-rose-600 dark:text-rose-400 text-xs tracking-wide flex items-center gap-1.5">
+            <n-icon :size="15" class="shrink-0">
+              <AlertTriangle />
+            </n-icon>
+            <span>破坏性变更风险</span>
+          </div>
+          <div class="text-[11.5px] leading-relaxed text-rose-700 dark:text-rose-300 font-medium">
+            上游 DSH 频繁存在破坏性变更，升级后未适配的第三方插件将直接瘫痪，并可能导致服务无法启动。
+          </div>
+          <div class="text-[11px] text-rose-600/80 dark:text-rose-400/80 leading-normal pt-0.5">
+            稳定使用请勿盲目升级。若更新后崩溃，可在 <span class="font-semibold text-rose-700 dark:text-rose-200">设置</span> 中 <span
+              class="font-semibold text-rose-700 dark:text-rose-200">重置修复</span> 回退内置版本。
+          </div>
+        </div>
       </div>
     </n-modal>
   </div>
@@ -218,7 +232,8 @@ import {
   PlayerStop,
   Refresh,
   Download,
-  Tools
+  Tools,
+  AlertTriangle
 } from '@vicons/tabler'
 import { useSystemStore } from '../stores/system'
 import { withAsyncLock } from '../utils/debounce'
