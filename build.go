@@ -173,12 +173,12 @@ func safeRemoveAll(path string) error {
 }
 
 // RepairEnvironment 恢复出厂设置：清空第三方插件与挂载配置，重新部署纯净运行环境
-func RepairEnvironment() {
+func RepairEnvironment(keepPlugins bool) {
 	state.SetStatus(StatusBuilding, "正在准备恢复出厂设置...")
-	go repairEnvironment()
+	go repairEnvironment(keepPlugins)
 }
 
-func repairEnvironment() {
+func repairEnvironment(keepPlugins bool) {
 	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
 	if _, err := os.Stat(tarPath); err != nil {
 		LogWarning("未检测到内置离线包，无法执行恢复出厂设置: %s", tarPath)
@@ -187,7 +187,9 @@ func repairEnvironment() {
 	}
 
 	stopAndWait()
-	ResetAllProfilePatches()
+	if !keepPlugins {
+		ResetAllProfilePatches()
+	}
 
 	state.SetStatus(StatusBuilding, "正在清空工作区并恢复出厂状态...")
 	LogInfo("开始执行恢复出厂设置（清理第三方插件与挂载，保留 API 凭据与配置）")

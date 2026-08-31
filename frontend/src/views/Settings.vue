@@ -222,7 +222,7 @@
                 </n-button>
               </div>
               <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                适用于插件冲突、环境损坏或服务启动异常等场景。将移除所有第三方插件与补丁修改并恢复纯净环境，您的模型 API 密钥、历史会话记录与系统设置将完整保留。
+                适用于在线更新回退、插件冲突、服务崩溃或环境损坏等场景。重新部署应用内置的已适配版本，您的模型 API 密钥、历史会话记录与系统设置将完整保留。
               </div>
             </div>
           </n-card>
@@ -233,7 +233,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, h, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   NCard,
@@ -250,6 +250,7 @@ import {
   NTooltip,
   NIcon,
   NButton,
+  NSwitch,
   useMessage,
   useDialog,
   type FormInst,
@@ -274,7 +275,6 @@ const {
   savedConfig,
   saving,
   loadError,
-  lastErrorMessage,
   configLoaded,
   isChanged,
   isServerPortChanged,
@@ -434,13 +434,44 @@ function handleReset() {
 
 // 重置运行环境（全局模态确认弹窗）
 function handleRepairEnvironment() {
+  const keepPlugins = ref(false)
   dialog.warning({
     title: '确认重置运行环境？',
-    content: '此操作将终止当前服务并重新部署内置版本，清空所有第三方插件、依赖修改与补丁配置。您的模型 API 密钥、历史会话记录与系统设置将完整保留。是否确认继续？',
+    content: () =>
+      h('div', { class: 'space-y-3 pt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300' }, [
+        h(
+          'p',
+          '此操作将终止当前服务并重新部署应用内置的已适配版本。您的模型 API 密钥、历史会话记录与系统设置将完整保留。是否确认继续？'
+        ),
+        h(
+          'div',
+          {
+            class:
+              'flex items-center justify-between gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70'
+          },
+          [
+            h('div', { class: 'flex flex-col gap-0.5' }, [
+              h('span', { class: 'font-medium text-slate-700 dark:text-slate-200' }, '保留已安装的第三方插件'),
+              h(
+                'span',
+                { class: 'text-[11px] text-slate-400 dark:text-slate-500' },
+                '适用于在线更新回退；若因插件异常请保持关闭'
+              )
+            ]),
+            h(NSwitch, {
+              value: keepPlugins.value,
+              size: 'small',
+              'onUpdate:value': (val: boolean) => {
+                keepPlugins.value = val
+              }
+            })
+          ]
+        )
+      ]),
     positiveText: '确认重置',
     negativeText: '取消',
     onPositiveClick: async () => {
-      const res = await systemStore.sendAction('repair')
+      const res = await systemStore.sendAction('repair', { keep_plugins: keepPlugins.value })
       if (res.success) {
         message.success(res.message || '已开始重置运行环境…')
       } else {

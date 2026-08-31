@@ -146,7 +146,7 @@ export const useSystemStore = defineStore('system', () => {
     return formatDuration(secs)
   })
 
-  async function sendAction(action: string): Promise<RequestResult<StatusData>> {
+  async function sendAction(action: string, payload?: Record<string, unknown>): Promise<RequestResult<StatusData>> {
     if (isActionLocked.value) {
       return { success: false, message: '当前有任务正在进行中，请稍候' }
     }
@@ -159,7 +159,7 @@ export const useSystemStore = defineStore('system', () => {
     }, 60000)
 
     try {
-      const res = await systemApi.sendAction(action)
+      const res = await systemApi.sendAction(action, payload)
       if (!res.success) {
         clearActionLock()
       }

@@ -16,8 +16,8 @@ import type {
 export const systemApi = {
   getStatus: () => http.get<StatusData>('config'),
   checkUpdate: () => http.get<CheckUpdateResult>('check-update'),
-  sendAction: (action: 'start' | 'stop' | 'restart' | 'upgrade' | 'rebuild' | string) =>
-    http.post<StatusData>('action', { action })
+  sendAction: (action: 'start' | 'stop' | 'restart' | 'upgrade' | 'rebuild' | 'repair' | 'reset' | string, payload?: Record<string, unknown>) =>
+    http.post<StatusData>('action', { action, ...payload })
 }
 
 /**

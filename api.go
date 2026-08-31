@@ -272,7 +272,8 @@ func handleWS(c *gin.Context) {
 
 func handleAction(c *gin.Context) {
 	var req struct {
-		Action string `json:"action"`
+		Action      string `json:"action"`
+		KeepPlugins bool   `json:"keep_plugins"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, "参数错误")
@@ -321,7 +322,7 @@ func handleAction(c *gin.Context) {
 				Fail(c, http.StatusBadRequest, "未检测到内置离线安装包，无法执行恢复出厂设置")
 				return
 			}
-			RepairEnvironment()
+			RepairEnvironment(req.KeepPlugins)
 		}
 	default:
 		Fail(c, http.StatusBadRequest, "未知操作: "+req.Action)
