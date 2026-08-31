@@ -222,7 +222,7 @@ func InitHarness(pkgVar, appdest string) {
 	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
 	zipVer := readAppDestVersion()
 
-	// 1. 评估预构建包部署决策
+	// 评估预构建包部署决策
 	if _, err := os.Stat(tarPath); err == nil {
 		shouldDeploy, isUpgrade, reason := EvaluateDeploymentPolicy(tarPath)
 		if shouldDeploy {
@@ -257,8 +257,9 @@ func InitHarness(pkgVar, appdest string) {
 		return
 	}
 
-	// 2. 常规启动：直接刷新版本并按上次状态自启
+	// 常规启动并按上次状态自启
 	refreshCommit()
+	ApplyBuiltinSkillConfig(pkgVar, appdest)
 	go func() {
 		_ = installPnpm()
 	}()

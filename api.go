@@ -165,20 +165,34 @@ func statusPayload() gin.H {
 		uptimeVal = uptime
 	}
 
+	var appVerVal any
+	var appRemoteVerVal any
+	appHasUpdate := false
+	if appVer := getAppVersion(); appVer != "" {
+		appVerVal = appVer
+		appHasUpdate = checkAppHasUpdate(appVer)
+		if remoteVer := getAppRemoteVersion(); remoteVer != "" {
+			appRemoteVerVal = remoteVer
+		}
+	}
+
 	return gin.H{
-		"name":          "DeepSeek Harness",
-		"version":       verVal,
-		"commit":        commitVal,
-		"target_commit": targetCommit,
-		"status":        status,
-		"uptime":        uptimeVal,
-		"started_at":    startedAt,
-		"server_port":   serverPort,
-		"server_time":   time.Now().Unix(),
-		"build_time":    buildTimeVal,
-		"app_url":       appURL,
-		"pid":           pidVal,
-		"last_message":  lastMsg,
+		"name":               "DeepSeek Harness",
+		"version":            verVal,
+		"app_version":        appVerVal,
+		"app_remote_version": appRemoteVerVal,
+		"app_has_update":     appHasUpdate,
+		"commit":             commitVal,
+		"target_commit":      targetCommit,
+		"status":             status,
+		"uptime":             uptimeVal,
+		"started_at":         startedAt,
+		"server_port":        serverPort,
+		"server_time":        time.Now().Unix(),
+		"build_time":         buildTimeVal,
+		"app_url":            appURL,
+		"pid":                pidVal,
+		"last_message":       lastMsg,
 	}
 }
 
@@ -444,10 +458,10 @@ func readLastNLines(path string, maxLines int) ([]string, string, error) {
 }
 
 func handleGetLogs(c *gin.Context) {
-	limitStr := c.DefaultQuery("limit", "150")
+	limitStr := c.DefaultQuery("limit", "300")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit <= 0 {
-		limit = 150
+		limit = 300
 	}
 	lines, content, err := readLastNLines(logFilePath(), limit)
 	if err != nil {

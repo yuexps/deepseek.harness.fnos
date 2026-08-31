@@ -1,11 +1,17 @@
 <template>
   <div v-auto-animate class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
-    <!-- 桌面端页头 -->
-    <n-page-header class="hidden sm:block">
-      <template #title>
-        <div class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">概览</div>
-      </template>
-    </n-page-header>
+    <!-- 页头标题 -->
+    <div
+      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full min-w-0 transition-all duration-200">
+      <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">概览</h1>
+
+      <!-- 右侧构建时间 -->
+      <span v-if="statusData.build_time"
+        class="text-xs font-mono text-slate-400 dark:text-slate-500 truncate"
+        :title="`Build: ${statusData.build_time}`">
+        Build: {{ statusData.build_time }}
+      </span>
+    </div>
 
     <template v-if="statusLoaded">
       <!-- 状态监控核心卡片 -->
@@ -34,13 +40,9 @@
               </div>
               <div
                 class="text-xs sm:text-sm text-slate-400 dark:text-slate-500 flex items-center gap-1.5 sm:gap-2 flex-nowrap min-w-0">
-                <span class="shrink-0">版本: {{ statusData.version || '-' }}</span>
+                <span class="shrink-0">版本: {{ formatVersion(statusData.version) }}</span>
                 <span class="text-slate-200 dark:text-slate-700 shrink-0 select-none">|</span>
                 <span class="shrink-0 font-mono">Commit: {{ statusData.commit || '-' }}</span>
-                <span class="text-slate-200 dark:text-slate-700 shrink-0 select-none">|</span>
-                <span class="min-w-0 truncate" :title="statusData.build_time ? `Build: ${statusData.build_time}` : ''">
-                  Build: {{ statusData.build_time || '-' }}
-                </span>
               </div>
             </div>
 
@@ -272,6 +274,12 @@ function formatShortCommit(c?: string): string {
   return c.length > 7 ? c.slice(0, 7) : c
 }
 
+function formatVersion(ver?: string): string {
+  if (!ver || ver === '-') return '-'
+  const v = ver.replace(/^v/i, '').trim()
+  return v ? `v${v}` : '-'
+}
+
 function formatVersionDisplay(ver?: string, commit?: string): string {
   const v = (ver || '').replace(/^v/i, '').trim()
   const c = formatShortCommit(commit)
@@ -387,7 +395,7 @@ const handleAction = withAsyncLock(async (action: string) => {
   }
 })
 
-// 统一动作触发（支持全局模态二次确认）
+// 统一动作触发
 function triggerAction(a: ActionCard) {
   if (a.confirmText) {
     dialog.warning({

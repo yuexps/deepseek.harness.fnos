@@ -119,9 +119,9 @@ func waitForPortFree(port int) {
 	}
 }
 
-// killHarnessLocked 彻底无死角强杀：无论主 PID 是否存活，对记录的进程组、端口占用进程进行深度连根清理
+// killHarnessLocked 彻底终止：清理进程组并深度排查端口残留
 func killHarnessLocked() {
-	// 1. 优先清理内存记录的进程句柄
+	// 清理内存记录的进程句柄
 	if process != nil && process.cmd != nil && process.cmd.Process != nil {
 		pid := process.cmd.Process.Pid
 		LogInfo("清理运行进程组 (PGID=%d)", pid)
@@ -130,7 +130,7 @@ func killHarnessLocked() {
 		process = nil
 	}
 
-	// 2. 清理 PID 文件记录的进程（即使主 PID 已不存在，也向 -pid 强发信号清理孤儿进程群）
+	// 清理 PID 文件记录的进程组
 	if data, err := os.ReadFile(pidFilePath()); err == nil {
 		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
 			LogInfo("清理残留进程组 (PGID=%d)", pid)
@@ -140,7 +140,7 @@ func killHarnessLocked() {
 		}
 	}
 
-	// 3. 端口占用深度排查兜底（清理占用该端口的所有残留进程）
+	// 清理占用端口的残留进程
 	cfg := GetConfig()
 	port := cfg.ServerPort
 	if port <= 0 {
@@ -152,7 +152,7 @@ func killHarnessLocked() {
 		_ = killProcessGroup(pid)
 	}
 
-	// 4. 等待确认端口真正释放
+	// 等待端口完全释放
 	waitForPortFree(port)
 
 	_ = os.Remove(pidFilePath())

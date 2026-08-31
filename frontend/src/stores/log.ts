@@ -9,7 +9,7 @@ export const useLogStore = defineStore('log', () => {
   const fetching = ref(false)
   const hasLoadedSnapshot = ref(false)
 
-  const MAX_LOG_LINES = 150
+  const MAX_LOG_LINES = 300
   const FLUSH_INTERVAL = 80
 
   let pendingBuffer = ''

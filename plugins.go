@@ -854,7 +854,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 
 	failure := ClassifyPnpmFailure(runErr.Error())
 
-	// 1. 跨大版本 Hoist 差异自愈：node_modules 是旧版 pnpm 创建的
+	// 依赖结构差异自愈
 	if failure.Code == PnpmFailureHoistPatternDiff {
 		LogWarning("[自动自愈] 依赖结构存在跨版本差异，正在执行重建 (pnpm install --no-frozen-lockfile)...")
 		_ = runPluginSubprocess([]string{"plugin", "--profile", cmd.Profile, "install", "--no-frozen-lockfile"}, timeout)
@@ -864,7 +864,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 2. 存储位置变更异常
+	// 存储位置异常自愈
 	if failure.Code == PnpmFailureUnexpectedStore {
 		_ = os.RemoveAll(filepath.Join(pluginProfileDir(), "node_modules"))
 		LogWarning("[自动自愈] 存储位置变更，已自动清理本地缓存并重试: %s", cmd.display())
@@ -874,7 +874,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 3. 新鲜发布版本被安全等待期锁定 (release-age-violation)
+	// 新发布版本安全拦截自愈
 	if failure.Code == PnpmFailureReleaseAge {
 		LogWarning("[自动自愈] 新发布版本受安全期检查拦截，已自动追加 --config.minimumReleaseAge=0 重试...")
 		retryArgs := append([]string{}, args...)
@@ -885,7 +885,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 4. 慢网/大包下载超时 (fetch-timeout)
+	// 大包下载超时自愈
 	if failure.Code == PnpmFailureFetchTimeout {
 		LogWarning("[自动自愈] 大包下载超时，正在以 10 分钟超时延长重试...")
 		retryArgs := append([]string{}, args...)
@@ -896,7 +896,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 5. 瞬态网络抖动 (transient-network)
+	// 网络波动重试自愈
 	if failure.Code == PnpmFailureTransientNetwork {
 		LogWarning("[自动自愈] 检测到网络瞬时波动，正在自动重试 1 次...")
 		if runErr = runPluginSubprocess(args, timeout); runErr == nil {
@@ -905,7 +905,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 6. 构建脚本拦截 (allowBuilds)
+	// 构建脚本拦截自愈
 	pkgs := parseBlockedPackages(runErr.Error())
 	if len(pkgs) > 0 {
 		if err := ensureAllowBuildsFor(cmd.Profile, pluginAllowKey(cmd), pkgs); err == nil {

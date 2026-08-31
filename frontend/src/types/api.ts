@@ -26,6 +26,9 @@ export type ServiceStatus = 'stopped' | 'starting' | 'running' | 'building'
 export interface StatusData {
   name: string
   version: string
+  app_version?: string
+  app_remote_version?: string
+  app_has_update?: boolean
   commit: string
   target_commit?: string
   status: ServiceStatus
@@ -150,6 +153,7 @@ export interface SettingsConfig {
   reverse_proxy_url: string
   access_password: string
   data_library_path?: string
+  enable_builtin_skill?: boolean
   version?: string
   commit?: string
   build_time?: string

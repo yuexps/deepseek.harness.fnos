@@ -21,10 +21,11 @@ export function viteDevMock(): Plugin {
         access_mode: 'fngateway',
         reverse_proxy_url: '',
         access_password: '',
+        enable_builtin_skill: true,
         data_library_path: '/vol1/@appdata/deepseek.harness',
-        version: '0.2.6-1',
+        version: '0.2.8-4',
         commit: '7b8f9a2',
-        build_time: '2026-08-21 16:00'
+        build_time: '2026-08-31 16:00'
       }
 
       const workspaces = [
@@ -126,6 +127,9 @@ export function viteDevMock(): Plugin {
         return {
           name: 'DeepSeek Harness',
           version: config.version,
+          app_version: '0.2.8-4',
+          app_remote_version: '0.2.8-5',
+          app_has_update: true,
           commit: config.commit,
           target_commit: targetCommit,
           status,
@@ -222,7 +226,7 @@ export function viteDevMock(): Plugin {
         if (!url.includes('/api/')) return next()
         const path = url.split('?')[0]
 
-        // 1. 状态快照
+        // 状态与配置快照
         if ((path.endsWith('/api/status') || path.endsWith('/api/config')) && req.method === 'GET') {
           if (path.endsWith('/api/config')) {
             return sendJson(res, 0, 'success', config)
@@ -230,7 +234,7 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, 'success', getStatusPayload())
         }
 
-        // 2. 服务控制状态机演进动作
+        // 服务控制动作
         if (path.endsWith('/api/action') && req.method === 'POST') {
           const body = await readJsonBody(req)
           const action = body.action
@@ -327,7 +331,7 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, '操作成功', getStatusPayload())
         }
 
-        // 3. 检查远程更新
+        // 检查远程更新
         if (path.endsWith('/api/check-update') && req.method === 'GET') {
           await new Promise((r) => setTimeout(r, 600))
           return sendJson(res, 0, 'success', {
@@ -341,7 +345,7 @@ export function viteDevMock(): Plugin {
           })
         }
 
-        // 4. 工作区列表
+        // 工作区列表
         if (path.endsWith('/api/workspace/list') && req.method === 'GET') {
           return sendJson(res, 0, 'success', {
             items: workspaces,
@@ -349,7 +353,7 @@ export function viteDevMock(): Plugin {
           })
         }
 
-        // 5. 插件管理
+        // 插件管理
         if (path.endsWith('/api/plugins') && req.method === 'GET') {
           return sendJson(res, 0, 'success', {
             profile: 'web',
@@ -540,7 +544,7 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 400, '当前没有正在执行的插件操作', null)
         }
 
-        // 6. 日志
+        // 运行日志
         if (path.endsWith('/api/logs') && req.method === 'GET') {
           return sendJson(res, 0, 'success', {
             lines: logs.map((l) => l + '\n'),
@@ -553,7 +557,7 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, '运行日志已清空', true)
         }
 
-        // 7. 设置读取与保存
+        // 保存配置
         if (path.endsWith('/api/config') && req.method === 'POST') {
           const body = await readJsonBody(req)
           Object.assign(config, body)

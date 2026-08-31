@@ -11,7 +11,8 @@ export const useConfigStore = defineStore('config', () => {
     network_proxy: '',
     access_mode: 'fngateway',
     reverse_proxy_url: '',
-    access_password: ''
+    access_password: '',
+    enable_builtin_skill: true
   })
 
   const savedConfig = ref<SettingsConfig | null>(null)
@@ -31,7 +32,8 @@ export const useConfigStore = defineStore('config', () => {
       (config.value.access_mode || 'fngateway') !== (savedConfig.value.access_mode || 'fngateway') ||
       (config.value.network_proxy || '') !== (savedConfig.value.network_proxy || '') ||
       (config.value.reverse_proxy_url || '') !== (savedConfig.value.reverse_proxy_url || '') ||
-      (config.value.access_password || '') !== (savedConfig.value.access_password || '')
+      (config.value.access_password || '') !== (savedConfig.value.access_password || '') ||
+      Boolean(config.value.enable_builtin_skill ?? true) !== Boolean(savedConfig.value.enable_builtin_skill ?? true)
     )
   })
 
@@ -74,6 +76,9 @@ export const useConfigStore = defineStore('config', () => {
           data.access_mode = data.reverse_proxy_url ? 'custom' : 'fngateway'
         }
         data.heap_memory_limit = data.heap_memory_limit ?? 0
+        if (data.enable_builtin_skill === undefined) {
+          data.enable_builtin_skill = true
+        }
         config.value = { ...data }
         savedConfig.value = { ...data }
         configLoaded.value = true

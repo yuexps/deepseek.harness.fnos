@@ -1,10 +1,11 @@
 <template>
   <div class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
-    <!-- 页头 -->
-    <div class="flex items-center justify-between gap-3">
-      <div class="flex items-baseline gap-2.5">
-        <h1 class="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">工作区</h1>
-        <span v-if="items.length" class="text-xs text-slate-400 dark:text-slate-500 font-medium">
+    <!-- 页头标题 -->
+    <div
+      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 transition-all duration-200">
+      <div class="flex items-baseline gap-2.5 min-w-0">
+        <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">工作区</h1>
+        <span v-if="items.length" class="text-xs text-slate-400 dark:text-slate-500 font-medium truncate">
           共 {{ items.length }} 个
         </span>
       </div>
@@ -47,7 +48,7 @@
           <n-card hoverable :bordered="false" @click="handleOpenWorkspace(item.path)"
             class="cursor-pointer interactive-card select-none shadow-sm group !h-full rounded-2xl">
             <n-thing>
-              <!-- 头像图标（提示在文件管理中打开） -->
+              <!-- 目录图标 -->
               <template #avatar>
                 <n-tooltip trigger="hover" :disabled="isTouch">
                   <template #trigger>
@@ -84,7 +85,7 @@
                 </n-tooltip>
               </template>
 
-              <!-- 描述：路径（仅在截断时由 n-ellipsis 精准提示） -->
+              <!-- 路径信息 -->
               <template #description>
                 <div class="text-xs text-slate-400 dark:text-slate-500 mt-1">
                   <n-ellipsis :line-clamp="1" :tooltip="!isTouch">
@@ -93,11 +94,11 @@
                 </div>
               </template>
 
-              <!-- 底部：左侧更新时间，右侧创建时间（全部统一 NTooltip） -->
+              <!-- 底部时间信息 -->
               <template #footer>
                 <div
                   class="flex items-center justify-between gap-2 text-[11px] text-slate-400 dark:text-slate-500 pt-0.5 w-full min-w-0">
-                  <!-- 左侧：更新时间 -->
+                  <!-- 更新时间 -->
                   <n-tooltip v-if="item.updatedAt" trigger="hover" :disabled="isTouch">
                     <template #trigger>
                       <div class="flex items-center gap-1 shrink-0 cursor-default">
@@ -111,7 +112,7 @@
                     更新于: {{ new Date(item.updatedAt).toLocaleString() }}
                   </n-tooltip>
 
-                  <!-- 右侧：创建时间 -->
+                  <!-- 创建时间 -->
                   <n-tooltip v-if="item.createdAt" trigger="hover" :disabled="isTouch">
                     <template #trigger>
                       <div

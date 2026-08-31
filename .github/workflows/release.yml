@@ -411,6 +411,7 @@ jobs:
           (
             mkdir -p fnpack_x86/app/bin
             cp -r fnpack/* fnpack_x86/
+            rm -f fnpack_x86/app/bin/skill/bin/trim-cli-linux-arm64
             cp /tmp/amd64-dist/version.txt fnpack_x86/app/.version
             cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86/app/deepseek-harness.tar.gz
             cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86/app/bin/${{ env.BIN_NAME }}
@@ -428,6 +429,7 @@ jobs:
           (
             mkdir -p fnpack_arm/app/bin
             cp -r fnpack/* fnpack_arm/
+            rm -f fnpack_arm/app/bin/skill/bin/trim-cli-linux-x64
             cp /tmp/amd64-dist/version.txt fnpack_arm/app/.version
             cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm/app/deepseek-harness.tar.gz
             cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm/app/bin/${{ env.BIN_NAME }}

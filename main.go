@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
@@ -14,7 +15,10 @@ import (
 //go:embed frontend/dist/*
 var embeddedWebFS embed.FS
 
-var globalPkgVar string
+var (
+	globalPkgVar string
+	globalAppVer string
+)
 
 func main() {
 	pkgVar := os.Getenv("DATA_LIBRARY_PATH")
@@ -28,12 +32,18 @@ func main() {
 		LogFatal("环境变量缺失: TRIM_APPDEST")
 	}
 
+	appVer := os.Getenv("TRIM_APPVER")
+	if appVer == "" {
+		LogFatal("环境变量缺失: TRIM_APPVER")
+	}
+	globalAppVer = strings.TrimSpace(appVer)
+
 	InitLogger(pkgVar)
 	runUser := os.Getenv("DSH_RUN_USER")
 	if runUser == "" {
 		runUser = "root"
 	}
-	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s, DSH_RUN_USER=%s)", pkgVar, appdest, runUser)
+	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s, TRIM_APPVER=%s, DSH_RUN_USER=%s)", pkgVar, appdest, globalAppVer, runUser)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -55,6 +65,7 @@ func main() {
 	WebFS = embeddedWebFS
 	InitRoutes(r)
 	StartWorkspaceWatch()
+	StartAppUpdateChecker()
 
 	_ = os.MkdirAll(appdest, 0755)
 	socketPath := filepath.Join(appdest, "web.sock")

@@ -1,7 +1,8 @@
 <template>
   <div class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
-    <!-- 同行页头与操作区 -->
-    <div class="flex items-center justify-between gap-3 w-full">
+    <!-- 页头与操作区 -->
+    <div
+      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full transition-all duration-200">
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">应用设置</h1>
 
       <!-- 右侧同行操作按钮组 -->
@@ -161,7 +162,7 @@
                 </n-form-item>
               </n-gi>
 
-              <!-- 第三行：自定义外部地址输入框 (仅在选中自定义地址时动态渲染) -->
+              <!-- 自定义外部地址输入框 (仅在选中自定义地址时动态渲染) -->
               <n-gi v-if="config.access_mode === 'custom'" span="2">
                 <n-form-item label="自定义外部访问地址" path="reverse_proxy_url">
                   <template #label>
@@ -181,6 +182,15 @@
                   <n-input v-model:value="config.reverse_proxy_url" placeholder="例如 https://dsh.example.com:2299"
                     clearable />
                 </n-form-item>
+              </n-gi>
+
+              <!-- 飞牛官方 TRIM CLI 技能开关 -->
+              <n-gi span="2">
+                <div
+                  class="flex items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                  <span class="text-sm font-medium text-slate-800 dark:text-slate-100">飞牛官方 TRIM CLI 技能</span>
+                  <n-switch v-model:value="config.enable_builtin_skill" size="medium" class="shrink-0" />
+                </div>
               </n-gi>
             </n-grid>
           </n-card>
@@ -233,7 +243,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, h, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, h, watch, onMounted, onUnmounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   NCard,
@@ -256,7 +266,10 @@ import {
   type FormInst,
   type FormRules
 } from 'naive-ui'
-import { Help, X } from '@vicons/tabler'
+import {
+  Help,
+  X
+} from '@vicons/tabler'
 import { useConfigStore } from '../stores/config'
 import { useSystemStore } from '../stores/system'
 import { trimSdk } from '../utils/trimSdk'
@@ -281,7 +294,7 @@ const {
   isHeapMemoryChanged
 } = storeToRefs(configStore)
 
-// 堆内存上限下拉选项 (GB)
+// 堆内存上限选项
 const heapMemoryOptions = [
   { label: '自动 (系统默认)', value: 0 },
   { label: '2 GB', value: 2 },
@@ -388,7 +401,7 @@ async function executeSave() {
   }
 }
 
-// 提交保存（含表单验证与重启二次确认）
+// 提交保存
 async function handleSave() {
   if (!formRef.value) return
   try {
@@ -398,7 +411,7 @@ async function handleSave() {
     return
   }
 
-  // 内部监听端口或堆内存上限变更且服务处于运行中时二次确认
+  // 端口或内存变更时提示重启
   if ((isServerPortChanged.value || isHeapMemoryChanged.value) && systemStore.isRunning) {
     const changes: string[] = []
     if (isServerPortChanged.value) {
@@ -432,7 +445,7 @@ function handleReset() {
   message.info('已取消修改')
 }
 
-// 重置运行环境（全局模态确认弹窗）
+// 重置运行环境确认弹窗
 function handleRepairEnvironment() {
   const keepPlugins = ref(false)
   dialog.warning({

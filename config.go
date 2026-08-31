@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,18 +10,19 @@ import (
 )
 
 type Config struct {
-	ServerPort      int    `json:"server_port"`
-	ProxyPort       int    `json:"proxy_port"`
-	HeapMemoryLimit int    `json:"heap_memory_limit,omitempty"`
-	NetworkProxy    string `json:"network_proxy"`
-	AccessMode      string `json:"access_mode,omitempty"`
-	ReverseProxyURL string `json:"reverse_proxy_url,omitempty"`
-	AccessPassword  string `json:"access_password,omitempty"`
-	DataLibraryPath string `json:"data_library_path,omitempty"`
-	Version         string `json:"version,omitempty"`
-	Commit          string `json:"commit,omitempty"`
-	BuildTime       string `json:"build_time,omitempty"`
-	LastRunState    string `json:"last_run_state,omitempty"`
+	ServerPort         int    `json:"server_port"`
+	ProxyPort          int    `json:"proxy_port"`
+	HeapMemoryLimit    int    `json:"heap_memory_limit,omitempty"`
+	NetworkProxy       string `json:"network_proxy"`
+	AccessMode         string `json:"access_mode,omitempty"`
+	ReverseProxyURL    string `json:"reverse_proxy_url,omitempty"`
+	AccessPassword     string `json:"access_password,omitempty"`
+	DataLibraryPath    string `json:"data_library_path,omitempty"`
+	EnableBuiltinSkill *bool  `json:"enable_builtin_skill,omitempty"`
+	Version            string `json:"version,omitempty"`
+	Commit             string `json:"commit,omitempty"`
+	BuildTime          string `json:"build_time,omitempty"`
+	LastRunState       string `json:"last_run_state,omitempty"`
 }
 
 var (
@@ -31,12 +33,22 @@ var (
 
 func InitConfig(pkgVar string) {
 	configFilePath = filepath.Join(pkgVar, "config.json")
-	globalConfig = Config{ServerPort: 2298, ProxyPort: 2299, AccessMode: "fngateway", DataLibraryPath: pkgVar}
+	defaultSkillEnabled := true
+	globalConfig = Config{
+		ServerPort:         2298,
+		ProxyPort:          2299,
+		AccessMode:         "fngateway",
+		DataLibraryPath:    pkgVar,
+		EnableBuiltinSkill: &defaultSkillEnabled,
+	}
 	data, err := os.ReadFile(configFilePath)
 	if err != nil {
 		return
 	}
 	_ = json.Unmarshal(data, &globalConfig)
+	if globalConfig.EnableBuiltinSkill == nil {
+		globalConfig.EnableBuiltinSkill = &defaultSkillEnabled
+	}
 	if globalConfig.AccessMode == "" {
 		if globalConfig.ReverseProxyURL != "" {
 			globalConfig.AccessMode = "custom"
@@ -193,5 +205,116 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	ApplyProxyEnv()
+	ApplyBuiltinSkillConfig(globalPkgVar, appDest)
+	return nil
+}
+
+// ApplyBuiltinSkillConfig 同步或切换内置飞牛官方 TRIM CLI 技能文件
+func ApplyBuiltinSkillConfig(pkgVar, appdest string) {
+	if pkgVar == "" {
+		pkgVar = globalPkgVar
+	}
+	if appdest == "" {
+		appdest = os.Getenv("TRIM_APPDEST")
+	}
+
+	skillSrc := filepath.Join(appdest, "bin", "skill")
+	if _, err := os.Stat(skillSrc); err != nil {
+		skillSrc = "fnpack/app/bin/skill"
+	}
+	if _, err := os.Stat(skillSrc); err != nil {
+		return
+	}
+
+	cfg := GetConfig()
+	enabled := true
+	if cfg.EnableBuiltinSkill != nil {
+		enabled = *cfg.EnableBuiltinSkill
+	}
+
+	skillsDir := filepath.Join(pkgVar, "dsh-data", "skills")
+	targetSkill := filepath.Join(skillsDir, "trim-cli")
+
+	if !enabled {
+		_ = os.RemoveAll(targetSkill)
+		LogInfo("[内置技能] 飞牛官方 TRIM CLI 技能已禁用并移除")
+		return
+	}
+
+	_ = os.MkdirAll(skillsDir, 0755)
+
+	// 复制技能目录，避免沙箱软链接隔离权限异常
+	_ = os.RemoveAll(targetSkill)
+	if err := copyDir(skillSrc, targetSkill); err != nil {
+		LogError("[内置技能] 复制技能文件失败: %v", err)
+		return
+	}
+
+	// 设置脚本与二进制文件可执行权限
+	_ = os.Chmod(filepath.Join(targetSkill, "scripts", "trim-cli"), 0755)
+	if binFiles, err := os.ReadDir(filepath.Join(targetSkill, "bin")); err == nil {
+		for _, f := range binFiles {
+			_ = os.Chmod(filepath.Join(targetSkill, "bin", f.Name()), 0755)
+		}
+	}
+
+	LogInfo("[内置技能] 飞牛官方 TRIM CLI 技能已就绪 (目标: %s)", targetSkill)
+}
+
+// copyFile 复制单个文件并保留权限
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return nil
+}
+
+// copyDir 递归复制目录
+func copyDir(src, dst string) error {
+	info, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(dst, info.Mode()); err != nil {
+		return err
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
