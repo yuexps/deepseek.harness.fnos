@@ -1,9 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -55,34 +55,41 @@ func fetchAppRemoteUpdate() {
 			transport.Proxy = http.ProxyURL(pURL)
 		}
 	}
-	client := &http.Client{Transport: transport, Timeout: 8 * time.Second}
-	req, err := http.NewRequest("GET", "https://api.github.com/repos/yuexps/deepseek.harness.fnos/releases/latest", nil)
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   8 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequest("GET", "https://github.com/yuexps/deepseek.harness.fnos/releases/latest", nil)
 	if err != nil {
 		return
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "DeepSeek-Harness-FNOS")
 
 	resp, err := client.Do(req)
 	if err != nil {
+		LogWarning("[版本检测] 检查更新失败: %s", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
-		var rel struct {
-			TagName string `json:"tag_name"`
-		}
-		if json.NewDecoder(resp.Body).Decode(&rel) == nil {
-			rVer := strings.TrimPrefix(strings.TrimSpace(rel.TagName), "v")
-			if rVer != "" {
-				cachedAppCheckMutex.Lock()
-				cachedAppRemoteVer = rVer
-				cachedAppCheckMutex.Unlock()
-				LogInfo("[版本检测] 远端最新版本为 v%s，当前版本为 %s", rVer, localVer)
-			}
+	if resp.StatusCode == http.StatusFound || resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusTemporaryRedirect {
+		loc := resp.Header.Get("Location")
+		tag := path.Base(loc)
+		rVer := strings.TrimPrefix(strings.TrimSpace(tag), "v")
+		if rVer != "" && rVer != "latest" {
+			cachedAppCheckMutex.Lock()
+			cachedAppRemoteVer = rVer
+			cachedAppCheckMutex.Unlock()
+			cleanLocal := strings.TrimPrefix(strings.TrimSpace(localVer), "v")
+			LogInfo("[版本检测] 远端最新版本为 v%s，当前版本为 v%s", rVer, cleanLocal)
+			return
 		}
 	}
+
+	LogWarning("[版本检测] 检查更新失败: HTTP %d", resp.StatusCode)
 }
 
 // StartAppUpdateChecker 启动后台版本检查轮询
