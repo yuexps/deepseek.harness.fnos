@@ -150,83 +150,38 @@ func isRuntimeReady() bool {
 	return true
 }
 
-// PackageFingerprint 记录已部署安装包的静态指纹
-type PackageFingerprint struct {
-	Version string `json:"version"`
-	ModTime int64  `json:"mod_time"`
-	Size    int64  `json:"size"`
-}
-
-func deployedFingerprintPath() string {
-	return filepath.Join(pkgVarDir, ".deployed_pkg")
-}
-
-func readDeployedFingerprint() (PackageFingerprint, bool) {
-	data, err := os.ReadFile(deployedFingerprintPath())
-	if err != nil {
-		return PackageFingerprint{}, false
-	}
-	var stamp PackageFingerprint
-	if err := json.Unmarshal(data, &stamp); err != nil {
-		return PackageFingerprint{}, false
-	}
-	return stamp, true
-}
-
-func writeDeployedFingerprint(ver string, fi os.FileInfo) {
-	stamp := PackageFingerprint{
-		Version: ver,
-		ModTime: fi.ModTime().Unix(),
-		Size:    fi.Size(),
-	}
-	data, err := json.Marshal(stamp)
-	if err == nil {
-		_ = os.WriteFile(deployedFingerprintPath(), data, 0644)
-	}
-}
-
-// EvaluateDeploymentPolicy 综合判定是否需要解压预构建包
+// EvaluateDeploymentPolicy 判定是否需要部署或升级内置离线包
 func EvaluateDeploymentPolicy(tarPath string) (shouldDeploy bool, isUpgrade bool, reason string) {
-	fi, err := os.Stat(tarPath)
-	if err != nil {
+	if _, err := os.Stat(tarPath); err != nil {
 		return false, false, "内置离线包不存在"
 	}
 
 	zipVer := readAppDestVersion()
 	installedVer := readVersion()
-	stamp, hasStamp := readDeployedFingerprint()
-	pkgChanged := !hasStamp || stamp.ModTime != fi.ModTime().Unix() || stamp.Size != fi.Size() || stamp.Version != zipVer
 
-	// 工作区不完整时自愈解压
+	// 运行环境未就绪时执行初始化或自愈部署
 	if !isRuntimeReady() {
 		return true, false, fmt.Sprintf("运行环境未就绪或产物缺失，正在部署预构建包 (v%s)...", zipVer)
 	}
 
-	// 本地高版本保护，防止降级
-	if zipVer != "" && installedVer != "" && CompareSemver(zipVer, installedVer) < 0 {
-		return false, false, fmt.Sprintf("本地运行版本 (v%s) 高于内置安装包 (v%s)，保留本地版本", installedVer, zipVer)
-	}
-
-	// 安装包版本升级
+	// 仅在安装包版本高于本地运行版本时执行升级
 	if zipVer != "" && installedVer != "" && CompareSemver(zipVer, installedVer) > 0 {
 		return true, true, fmt.Sprintf("检测到新版本安装包 (v%s → v%s)，正在升级部署...", installedVer, zipVer)
 	}
 
-	// 同版本特征变更覆盖
-	if pkgChanged {
-		return true, true, fmt.Sprintf("检测到安装包文件更新 (v%s)，正在重新同步部署...", zipVer)
+	// 默认保留本地运行环境与在线更新
+	if installedVer != "" {
+		return false, false, fmt.Sprintf("本地运行版本 (v%s) 已就绪，跳过离线包解压", installedVer)
 	}
-
-	// 状态一致，跳过解压
-	return false, false, fmt.Sprintf("内置包版本 (v%s) 与当前运行状态一致，跳过解压", zipVer)
+	return false, false, "本地运行环境已就绪，跳过离线包解压"
 }
 
-// deployPrebuilt 部署内置离线包并启动服务
+// deployPrebuilt 部署内置离线包并拉起服务
 func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 	state.SetStatus(StatusBuilding, "正在准备部署预构建包...")
 	go func() {
 		installedVer := readVersion()
-		if isUpgrade {
+		if isUpgrade && installedVer != "" && zipVer != "" {
 			state.SetStatus(StatusBuilding, fmt.Sprintf("正在升级部署预构建包 (v%s → v%s)...", installedVer, zipVer))
 			LogInfo("检测到新版本预构建包 (v%s → v%s)，正在安全部署: %s", installedVer, zipVer, tarPath)
 		} else {
@@ -234,17 +189,12 @@ func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 			LogInfo("解压部署预构建包: %s (版本: v%s)", tarPath, zipVer)
 		}
 
-		// 解压前物理清空，杜绝残留
 		_ = safeRemoveAll(srcDir)
 
 		if err := extractTarGz(tarPath, filepath.Dir(srcDir)); err != nil {
 			LogWarning("解压部署预构建包失败: %s", err)
 			state.SetStatus(StatusStopped, "解压离线安装包失败: "+err.Error())
 			return
-		}
-
-		if fi, err := os.Stat(tarPath); err == nil {
-			writeDeployedFingerprint(zipVer, fi)
 		}
 
 		if err := installPnpm(); err != nil {
