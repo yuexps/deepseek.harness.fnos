@@ -37,6 +37,8 @@ func pluginEnv() []string {
 		"PNPM_CONFIG_FETCH_RETRIES=2",
 		"PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
 		"NPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
+		"PNPM_CONFIG_MINIMUM_RELEASE_AGE=0",
+		"pnpm_config_minimum_release_age=0",
 	)
 }
 
@@ -258,7 +260,7 @@ func (c *pluginCommand) dshArgs() []string {
 	if (c.Verb == pluginAdd || c.Verb == pluginRemove) && profileHasWorkspace() {
 		args = append(args, "-w")
 	}
-	if c.Verb == pluginAdd || c.Verb == pluginInstall {
+	if c.Verb == pluginAdd || c.Verb == pluginInstall || c.Verb == pluginRemove {
 		args = append(args, "--config.minimumReleaseAge=0")
 	}
 	args = append(args, c.Specs...)
@@ -846,7 +848,7 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		return doneMsg, nil
 	}
 
-	if cmd.Verb != pluginAdd && cmd.Verb != pluginUpdate && cmd.Verb != pluginInstall {
+	if cmd.Verb != pluginAdd && cmd.Verb != pluginUpdate && cmd.Verb != pluginInstall && cmd.Verb != pluginRemove {
 		return "", fmt.Errorf("%s", FormatPnpmFailureMessage(runErr.Error()))
 	}
 

@@ -153,20 +153,6 @@ func handleFnGateway(c *gin.Context) {
 				}
 			}
 
-			// 拦截 JS 资源改写回环状态判定
-			if (strings.Contains(contentType, "javascript") || strings.Contains(contentType, "text/javascript")) && resp.Body != nil {
-				bodyBytes, err := io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
-				if err != nil {
-					return err
-				}
-
-				modified := rewriteJsBundle(bodyBytes)
-				resp.Body = io.NopCloser(bytes.NewReader(modified))
-				resp.ContentLength = int64(len(modified))
-				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
-			}
-
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
@@ -741,6 +727,7 @@ func fnGatewayBridgeScript() string {
     }
 
     // DSH 客户端回环状态与配置持久化兼容补丁
+    try{targetWindow.__DSH_TRANSPORT__=Object.assign(targetWindow.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}
     var hookModuleLoader = function (loader) {
       if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
       var rawLoad = loader.load.bind(loader);

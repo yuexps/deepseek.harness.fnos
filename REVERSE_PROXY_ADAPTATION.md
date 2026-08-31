@@ -20,9 +20,9 @@
 | 序号 | 遇到的问题 / 现象 | 产生根因 | 处理方案 | 涉及文件 |
 | :--- | :--- | :--- | :--- | :--- |
 | **1** | 特权 API（配置读写、模型发现等）返回 **403 Forbidden** | DSH 后端通过 `isTrustedApiRequest` 判定请求头，特权接口只接受来自 `127.0.0.1` 且同源的请求 | 在 Go 反向代理的 `Rewrite` 阶段，将发送给 DSH 后端的请求头改写为目标同源 `Host`、`Origin`，并将 `Sec-Fetch-Site` 设为 `same-origin` | `proxy.go`<br>`fngateway.go` |
-| **2** | 飞牛网关子路径下静态资源与接口 **404** | DSH 前端默认为根路径 `/` 构建，子路径反代下静态标签与动态请求未带网关前缀 | 1. 代理响应 HTML 时正则替换静态属性（`src`/`href`）；<br>2. 注入 `fnGatewayBridgeScript` 拦截 `fetch`、`XHR`、`WebSocket`、`EventSource`、DOM 插入等动态请求 | `fngateway.go` |
-| **3** | HTTP 局域网访问时控制台报错 `randomUUID is not a function` | 现代浏览器将 `crypto.randomUUID()` 限制在安全上下文（HTTPS / localhost），普通 HTTP IP 无法使用 | 在 HTML 头部注入纯 JS 实现的 RFC4122 v4 UUID 生成器，Polyfill 到 `window.crypto` | `proxy.go`<br>`fngateway.go` |
-| **4** | 反代下「插件配置」面板空白、模型设置无法读取保存 | DSH 客户端 `@deepseek-ai/dsh-client-connection` 依 `location.hostname` 判定 `isLoopback`；非 127.0.0.1 时将配置模式置为 `'memory'` 并拒绝向后端拉取数据 | 1. 注入脚本 Hook `window.__ModuleLoader__`，在注册 `connection` 服务时将 `handle.isLoopback` 置为 `true`；<br>2. 代理转发 `.js` 时通过 `rewriteJsBundle` 兜底替换 | `proxy.go`<br>`fngateway.go` |
+| **2** | 飞牛网关子路径下静态资源与接口 **404** | DSH 前端默认为根路径 `/` 构建，子路径反代下静态标签、动态请求及 WebSocket 复用流未带网关前缀 | 1. 代理响应 HTML 时正则替换静态属性（`src`/`href`）；<br>2. 注入 `fnGatewayBridgeScript` 拦截 `fetch`、`XHR`、`WebSocket`（含 `/api/remote.mux`）、`EventSource`、DOM 插入等动态请求 | `fngateway.go` |
+| **3** | HTTP 局域网访问时控制台报错 `randomUUID is not a function` | 现代浏览器将 `crypto.randomUUID()` 限制在安全上下文（HTTPS / localhost），普通 HTTP IP 无法使用 | 在 HTML 头部注入纯 JS 实现的 RFC4122 v4 UUID 生成器，Polyfill 到 `window.crypto`（上游已引入 `@deepseek-ai/dsh-util-crypto`，此处作为全环境兜底防御） | `proxy.go`<br>`fngateway.go` |
+| **4** | 反代下「插件配置」面板空白、模型设置无法读取保存 | DSH 客户端 `@deepseek-ai/dsh-client-connection` 依 `location.hostname` 判定 `isLoopback`；非 127.0.0.1 时将配置模式置为 `'memory'` 并拒绝向后端拉取数据 | **双重安全防护机制**：<br>1. 注入 `window.__DSH_TRANSPORT__ = { ownsHost: true }` 走通上游原生特权分支；<br>2. Hook `window.__ModuleLoader__`，在注册 `connection` 服务时劫持 `handle.isLoopback = true`（保持 JS 产物 100% 原始纯净，不进行暴力文本替换） | `proxy.go`<br>`fngateway.go` |
 | **5** | 远程 Web 访问时右上角显示红字“无法打开配置文件” | 官方设计中该按钮会调用桌面 GUI 编辑器（如 `xdg-open`），在 Linux 无头 NAS 服务器上无法执行 | 注入 `<style>[data-slot="settings.action"] { display: none !important; }</style>`，隐藏无头环境下无意义的桌面级操作 | `proxy.go`<br>`fngateway.go` |
 
 ---
@@ -44,9 +44,15 @@ if pr.Out.Header.Get("Sec-Fetch-Site") != "" {
 pr.Out.Header.Set("Accept-Encoding", "identity")
 ```
 
-### 2. 客户端模块加载器 Hook（启用配置读写与插件卡片）
-在注入到 HTML `<head>` 的脚本中，拦截 Cordis 模块系统：
+### 2. 客户端特权状态注入与模块加载器 Hook（启用配置读写与插件卡片）
+结合 DSH 最新架构演进，采用**原生协议声明 + 运行时模块 Hook**双重安全体系（完全避免对 bundle 字节码进行暴力文本替换，防止破坏 JS 语法树）：
 ```javascript
+// 1. 原生协议声明：上游 client-connection 在检测到 ownsHost 时将 isLoopback 初始化为 true
+try {
+  window.__DSH_TRANSPORT__ = Object.assign(window.__DSH_TRANSPORT__ || {}, { ownsHost: true });
+} catch (_) {}
+
+// 2. 运行时 Hook：拦截 Cordis 模块加载，劫持 connection 句柄
 var hookModuleLoader = function (loader) {
   if (!loader || typeof loader.load !== "function" || loader.__hooked) return loader;
   var rawLoad = loader.load.bind(loader);
@@ -121,7 +127,7 @@ if (window.__ModuleLoader__) {
 - **`Element.prototype.innerHTML` / `insertAdjacentHTML`**：正则解析替换 HTML 字符串内的相对资源路径（支持 `src`、`href`、`action`、`poster`）；
 - **`history.pushState` / `replaceState`**：防止 SPA 路由跳转覆盖子路径前缀导致刷新 404；
 - **同源 `<iframe>` 穿透挂载**：动态挂载的同源 iframe 自动递归初始化拦截桥接脚本；
-- **`window.WebSocket` / `EventSource`**：重写 WebSocket 握手与 SSE 流式连接路径；
+- **`window.WebSocket` / `EventSource`**：重写 WebSocket 握手（包含最新的 `/api/remote.mux` 复用流通道）与 SSE 流式连接路径；
 - **`Worker` / `SharedWorker` / `serviceWorker.register`**：改写多线程与后台服务脚本路径及 scope；
 - **`manifest.webmanifest` 子路径动态适配**：动态解析并改写 PWA 清单中的 `scope`、`start_url`、`id` 及图标路径，确保在子路径反代下 PWA 语法与作用域校验 100% 吻合；
 - **`Set-Cookie` 响应头作用域改写**：将根路径 Cookie 映射至网关子路径下。

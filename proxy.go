@@ -523,20 +523,6 @@ func startReverseProxyLocked() error {
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
 			}
 
-			// 拦截 JS 资源改写回环状态判定
-			if (strings.Contains(contentType, "javascript") || strings.Contains(contentType, "text/javascript")) && resp.Body != nil {
-				bodyBytes, err := io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
-				if err != nil {
-					return err
-				}
-
-				modified := rewriteJsBundle(bodyBytes)
-				resp.Body = io.NopCloser(bytes.NewReader(modified))
-				resp.ContentLength = int64(len(modified))
-				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
-			}
-
 			return nil
 		},
 		ErrorHandler: errHandler,
@@ -648,6 +634,7 @@ func restartReverseProxy() {
 }
 
 const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none !important; }</style><script>(function(){
+  try{window.__DSH_TRANSPORT__=Object.assign(window.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}
   var c=window.crypto;
   if(c&&typeof c.randomUUID!=="function"&&typeof c.getRandomValues==="function"){
     var getRand=c.getRandomValues.bind(c);
@@ -727,15 +714,6 @@ const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none
     } catch (_) {}
   }
 })();</script>`
-
-// rewriteJsBundle 改写客户端 JS 中的回环判断，使远程/反代访问时也能正常读取并持久化插件设置
-func rewriteJsBundle(body []byte) []byte {
-	res := bytes.ReplaceAll(body, []byte(`connection.isLoopback ? "host" : "memory"`), []byte(`"host"`))
-	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback ? 'host' : 'memory'`), []byte(`'host'`))
-	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback?"host":"memory"`), []byte(`"host"`))
-	res = bytes.ReplaceAll(res, []byte(`connection.isLoopback?'host':'memory'`), []byte(`'host'`))
-	return res
-}
 
 // injectHtmlPolyfill 将兼容补丁注入 HTML 的 head 头部
 func injectHtmlPolyfill(body []byte) []byte {
