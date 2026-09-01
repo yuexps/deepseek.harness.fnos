@@ -3,10 +3,17 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	DefaultNpmRegistry  = "https://registry.npmmirror.com"
+	OfficialNpmRegistry = "https://registry.npmjs.org"
 )
 
 type Config struct {
@@ -14,6 +21,8 @@ type Config struct {
 	ProxyPort          int    `json:"proxy_port"`
 	HeapMemoryLimit    int    `json:"heap_memory_limit,omitempty"`
 	NetworkProxy       string `json:"network_proxy"`
+	ProxyDshRuntime    *bool  `json:"proxy_dsh_runtime,omitempty"`
+	NpmRegistry        string `json:"npm_registry,omitempty"`
 	AccessMode         string `json:"access_mode,omitempty"`
 	ReverseProxyURL    string `json:"reverse_proxy_url,omitempty"`
 	AccessPassword     string `json:"access_password,omitempty"`
@@ -25,6 +34,20 @@ type Config struct {
 	LastRunState       string `json:"last_run_state,omitempty"`
 }
 
+func (c Config) IsProxyDshRuntimeEnabled() bool {
+	if c.ProxyDshRuntime == nil {
+		return false
+	}
+	return *c.ProxyDshRuntime
+}
+
+func (c Config) GetNpmRegistry() string {
+	if trimmed := strings.TrimSpace(c.NpmRegistry); trimmed != "" {
+		return trimmed
+	}
+	return DefaultNpmRegistry
+}
+
 var (
 	globalConfig   Config
 	configMu       sync.RWMutex
@@ -34,12 +57,15 @@ var (
 func InitConfig(pkgVar string) {
 	configFilePath = filepath.Join(pkgVar, "config.json")
 	defaultSkillEnabled := true
+	defaultProxyDsh := false
 	globalConfig = Config{
 		ServerPort:         2298,
 		ProxyPort:          2299,
 		AccessMode:         "fngateway",
 		DataLibraryPath:    pkgVar,
 		EnableBuiltinSkill: &defaultSkillEnabled,
+		ProxyDshRuntime:    &defaultProxyDsh,
+		NpmRegistry:        DefaultNpmRegistry,
 	}
 	data, err := os.ReadFile(configFilePath)
 	if err != nil {
@@ -48,6 +74,12 @@ func InitConfig(pkgVar string) {
 	_ = json.Unmarshal(data, &globalConfig)
 	if globalConfig.EnableBuiltinSkill == nil {
 		globalConfig.EnableBuiltinSkill = &defaultSkillEnabled
+	}
+	if globalConfig.ProxyDshRuntime == nil {
+		globalConfig.ProxyDshRuntime = &defaultProxyDsh
+	}
+	if globalConfig.NpmRegistry == "" {
+		globalConfig.NpmRegistry = DefaultNpmRegistry
 	}
 	if globalConfig.AccessMode == "" {
 		if globalConfig.ReverseProxyURL != "" {
@@ -73,16 +105,8 @@ func InitAppEnv(pkgVar string) {
 	_ = os.Setenv("PNPM_HOME", pnpmHome)
 	_ = os.Setenv("pnpm_config_store_dir", storeDir)
 	_ = os.Setenv("npm_config_cache", filepath.Join(pkgVar, "npm-cache"))
-	_ = os.Setenv("npm_config_registry", "https://registry.npmmirror.com")
-	_ = os.Setenv("NPM_CONFIG_REGISTRY", "https://registry.npmmirror.com")
-	_ = os.Setenv("pnpm_config_registry", "https://registry.npmmirror.com")
-	_ = os.Setenv("PNPM_CONFIG_REGISTRY", "https://registry.npmmirror.com")
 
-	// 固化全局 .npmrc 确保 pnpm 11 及子进程稳定使用国内镜像
-	homeNpmrc := filepath.Join(homeDir, ".npmrc")
-	if _, err := os.Stat(homeNpmrc); os.IsNotExist(err) {
-		_ = os.WriteFile(homeNpmrc, []byte("registry=https://registry.npmmirror.com\n"), 0644)
-	}
+	ApplyNpmRegistryEnv(pkgVar)
 
 	dshHome := filepath.Join(pkgVar, "dsh-data")
 	_ = os.Setenv("DSH_HOME", dshHome)
@@ -91,19 +115,46 @@ func InitAppEnv(pkgVar string) {
 	ApplyProxyEnv()
 }
 
+// ApplyNpmRegistryEnv 根据当前配置应用 NPM 依赖源环境变量并同步 .npmrc
+func ApplyNpmRegistryEnv(pkgVar string) {
+	if pkgVar == "" {
+		pkgVar = globalPkgVar
+	}
+	registry := GetConfig().GetNpmRegistry()
+	_ = os.Setenv("npm_config_registry", registry)
+	_ = os.Setenv("NPM_CONFIG_REGISTRY", registry)
+	_ = os.Setenv("pnpm_config_registry", registry)
+	_ = os.Setenv("PNPM_CONFIG_REGISTRY", registry)
+
+	if pkgVar != "" {
+		homeNpmrc := filepath.Join(pkgVar, "home", ".npmrc")
+		_ = os.MkdirAll(filepath.Dir(homeNpmrc), 0755)
+		_ = os.WriteFile(homeNpmrc, []byte("registry="+registry+"\n"), 0644)
+	}
+}
+
 // ApplyProxyEnv 根据当前配置应用或清理网络代理环境变量
 func ApplyProxyEnv() {
 	cfg := GetConfig()
-	if cfg.NetworkProxy != "" {
-		noProxy := "localhost,127.0.0.1,::1,registry.npmmirror.com,npmmirror.com"
+	if cfg.NetworkProxy != "" && cfg.IsProxyDshRuntimeEnabled() {
+		noProxy := "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,*.local,registry.npmmirror.com,npmmirror.com"
+		if u, err := url.Parse(cfg.GetNpmRegistry()); err == nil && u.Hostname() != "" {
+			if !strings.Contains(u.Hostname(), "npmjs.org") && !strings.Contains(noProxy, u.Hostname()) {
+				noProxy += "," + u.Hostname()
+			}
+		}
 		_ = os.Setenv("npm_config_proxy", cfg.NetworkProxy)
 		_ = os.Setenv("npm_config_https_proxy", cfg.NetworkProxy)
 		_ = os.Setenv("npm_config_noproxy", noProxy)
 		_ = os.Setenv("HTTP_PROXY", cfg.NetworkProxy)
 		_ = os.Setenv("HTTPS_PROXY", cfg.NetworkProxy)
 		_ = os.Setenv("ALL_PROXY", cfg.NetworkProxy)
+		_ = os.Setenv("http_proxy", cfg.NetworkProxy)
+		_ = os.Setenv("https_proxy", cfg.NetworkProxy)
+		_ = os.Setenv("all_proxy", cfg.NetworkProxy)
 		_ = os.Setenv("NO_PROXY", noProxy)
 		_ = os.Setenv("no_proxy", noProxy)
+		_ = os.Setenv("NODE_USE_ENV_PROXY", "1")
 	} else {
 		_ = os.Unsetenv("npm_config_proxy")
 		_ = os.Unsetenv("npm_config_https_proxy")
@@ -111,8 +162,12 @@ func ApplyProxyEnv() {
 		_ = os.Unsetenv("HTTP_PROXY")
 		_ = os.Unsetenv("HTTPS_PROXY")
 		_ = os.Unsetenv("ALL_PROXY")
+		_ = os.Unsetenv("http_proxy")
+		_ = os.Unsetenv("https_proxy")
+		_ = os.Unsetenv("all_proxy")
 		_ = os.Unsetenv("NO_PROXY")
 		_ = os.Unsetenv("no_proxy")
+		_ = os.Unsetenv("NODE_USE_ENV_PROXY")
 	}
 }
 
@@ -205,6 +260,7 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	ApplyProxyEnv()
+	ApplyNpmRegistryEnv(globalPkgVar)
 	ApplyBuiltinSkillConfig(globalPkgVar, appDest)
 	return nil
 }

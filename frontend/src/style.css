@@ -85,3 +85,14 @@ html.dark .interactive-card:hover {
   transform: scale(0.96);
 }
 
+/* 返回顶部悬浮与点击反馈 */
+.n-back-top {
+  transition: transform 0.18s ease, box-shadow 0.2s ease, opacity 0.2s ease !important;
+}
+.n-back-top:hover {
+  transform: translateY(-2px);
+}
+.n-back-top:active {
+  transform: scale(0.92);
+}
+

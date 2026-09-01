@@ -2,7 +2,7 @@
   <div v-auto-animate class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
     <!-- 页头标题 -->
     <div
-      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full min-w-0 transition-all duration-200">
+      class="sticky -top-[14px] sm:-top-6 z-20 -mt-3.5 sm:-mt-4 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full min-w-0 transition-all duration-200">
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">概览</h1>
 
       <!-- 右侧构建时间 -->
@@ -46,10 +46,10 @@
               </div>
             </div>
 
-            <n-button type="primary" size="large" :disabled="!isRunning" @click="systemStore.openHarnessApp"
-              class="w-full sm:w-auto !h-12 px-7 shadow-sm shadow-fnos-blue/20 font-medium rounded-xl text-base transition-transform duration-150 active:scale-95">
+            <n-button type="primary" size="medium" :disabled="!isRunning" @click="systemStore.openHarnessApp"
+              class="w-full sm:w-auto !h-9 sm:!h-12 px-4 sm:px-7 shadow-sm shadow-fnos-blue/20 font-medium rounded-lg sm:rounded-xl text-sm sm:text-base transition-transform duration-150 active:scale-95">
               <template #icon>
-                <n-icon :size="20">
+                <n-icon class="text-[17px] sm:text-[20px]">
                   <ExternalLink />
                 </n-icon>
               </template>
@@ -58,83 +58,72 @@
           </div>
 
           <!-- 原生分割线 -->
-          <n-divider class="!my-5 sm:!my-6" />
+          <n-divider class="!my-3.5 sm:!my-6" />
 
-          <!-- 下半部分：3 列运行指标网格 -->
-          <n-grid :cols="3" :x-gap="16" :y-gap="12" class="text-center" responsive="screen" item-responsive>
-            <n-gi>
-              <div
-                class="py-3 sm:py-3.5 px-3 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] h-full flex flex-col justify-center transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
-                <n-statistic label="运行状态">
-                  <template #default>
-                    <div class="flex justify-center mt-1">
-                      <n-tag :type="statusTagType" size="medium" round :bordered="false"
-                        class="font-medium transition-all duration-200">
-                        <template #icon v-if="isBuilding || isStarting">
-                          <n-spin :size="12" class="mr-1" />
-                        </template>
-                        {{ statusLabel }}
-                      </n-tag>
-                    </div>
+          <!-- 下半部分：移动端扁长条 / 桌面端 3 列指标网格 -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-center">
+            <!-- 运行状态 -->
+            <div
+              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行状态</span>
+              <div class="flex items-center justify-end sm:justify-center sm:mt-1">
+                <n-tag :type="statusTagType" size="small" round :bordered="false"
+                  class="font-medium text-xs scale-95 sm:scale-100 transition-all duration-200">
+                  <template #icon v-if="isBuilding || isStarting">
+                    <n-spin :size="10" class="mr-0.5" />
                   </template>
-                </n-statistic>
+                  {{ statusLabel }}
+                </n-tag>
               </div>
-            </n-gi>
+            </div>
 
-            <n-gi>
-              <div
-                class="py-3 sm:py-3.5 px-3 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] h-full flex flex-col justify-center transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
-                <n-statistic label="运行时间">
-                  <template #default>
-                    <div class="text-sm sm:text-base font-bold text-slate-700 dark:text-slate-200 truncate mt-0.5">
-                      {{ uptimeText }}
-                    </div>
-                  </template>
-                </n-statistic>
+            <!-- 运行时间 -->
+            <div
+              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行时间</span>
+              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5">
+                {{ uptimeText }}
               </div>
-            </n-gi>
+            </div>
 
-            <n-gi>
-              <div
-                class="py-3 sm:py-3.5 px-3 rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] h-full flex flex-col justify-center transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
-                <n-statistic label="进程 PID">
-                  <template #default>
-                    <div class="text-sm sm:text-base font-bold text-slate-700 dark:text-slate-200 truncate mt-0.5"
-                      :title="isRunning && statusData.pid ? String(statusData.pid) : '-'">
-                      {{ isRunning && statusData.pid ? statusData.pid : '-' }}
-                    </div>
-                  </template>
-                </n-statistic>
+            <!-- 进程 PID -->
+            <div
+              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">进程 PID</span>
+              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+                :title="isRunning && statusData.pid ? String(statusData.pid) : '-'">
+                {{ isRunning && statusData.pid ? statusData.pid : '-' }}
               </div>
-            </n-gi>
-          </n-grid>
+            </div>
+          </div>
         </div>
       </n-card>
 
       <!-- 运行控制区 -->
       <div class="space-y-4">
         <h2 class="text-lg font-bold text-slate-800 dark:text-slate-100 tracking-tight">运行控制</h2>
-        <n-grid v-auto-animate :cols="4" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
+        <n-grid v-auto-animate :cols="4" :x-gap="10" :y-gap="10" responsive="screen" item-responsive class="sm:!gap-4">
           <n-gi span="2 m:1" v-for="a in actionCards" :key="a.action">
             <n-tooltip trigger="hover" :disabled="isTouch || a.disabled || a.loading">
               <template #trigger>
                 <div class="h-full">
                   <!-- 运行控制操作卡片 -->
                   <n-card hoverable :bordered="false"
-                    class="cursor-pointer text-center interactive-card select-none !p-2 sm:!p-4 shadow-sm group rounded-2xl !h-full"
+                    class="cursor-pointer text-center interactive-card select-none !p-1.5 sm:!p-4 shadow-sm group rounded-xl sm:rounded-2xl !h-full"
                     :class="{ 'opacity-50 !cursor-not-allowed !transform-none': a.disabled && !a.loading }"
                     @click="!a.disabled && !a.loading && triggerAction(a)">
-                    <div class="flex flex-col items-center justify-center gap-2.5 py-3">
+                    <div class="flex flex-col items-center justify-center gap-1.5 sm:gap-2.5 py-1.5 sm:py-3">
                       <div
-                        class="w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-200 group-hover:scale-110 group-active:scale-95"
+                        class="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center transition-all duration-200 group-hover:scale-110 group-active:scale-95"
                         :class="a.iconBg">
-                        <n-spin v-if="a.loading" :size="24" />
-                        <n-icon v-else :size="24" :class="a.iconColor" class="transition-transform duration-200">
+                        <n-spin v-if="a.loading" :size="18" class="sm:hidden" />
+                        <n-spin v-if="a.loading" :size="24" class="hidden sm:inline-block" />
+                        <n-icon v-else class="text-[18px] sm:text-[24px]" :class="a.iconColor">
                           <component :is="a.icon" />
                         </n-icon>
                       </div>
                       <span
-                        class="text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors duration-150">
+                        class="text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-300 group-hover:text-slate-900 dark:group-hover:text-white transition-colors duration-150">
                         {{ a.label }}
                       </span>
                     </div>
@@ -167,20 +156,19 @@
       negative-text="暂不更新" :loading="isActionLocked" @positive-click="confirmUpgrade"
       @negative-click="showUpdateModal = false">
       <div class="space-y-3 pt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-        <!-- 版本信息对比 -->
+        <!-- 版本信息对比（上下行信息样式） -->
         <div
-          class="p-2.5 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/70 dark:border-slate-800 flex items-center justify-between gap-3 font-mono">
-          <div class="flex flex-col gap-0.5 min-w-0">
-            <span class="text-[11px] text-slate-400 dark:text-slate-500 font-sans">当前版本</span>
-            <span class="font-semibold text-slate-700 dark:text-slate-200 text-xs">
+          class="p-3 bg-slate-50 dark:bg-white/[0.03] rounded-xl border border-slate-200/70 dark:border-slate-800 space-y-2">
+          <div class="flex items-center justify-between text-xs">
+            <span class="text-slate-500 dark:text-slate-400">当前版本</span>
+            <span class="font-mono font-medium text-slate-700 dark:text-slate-200">
               {{ formatVersionDisplay(updateInfo?.current_version || statusData.version, updateInfo?.current_commit ||
                 statusData.commit) }}
             </span>
           </div>
-          <div class="text-slate-300 dark:text-slate-600 text-sm font-sans shrink-0">→</div>
-          <div class="flex flex-col gap-0.5 min-w-0 items-end text-right">
-            <span class="text-[11px] text-blue-600 dark:text-blue-400 font-sans font-medium">目标版本</span>
-            <span class="font-semibold text-blue-600 dark:text-blue-400 text-xs">
+          <div class="flex items-center justify-between text-xs pt-2 border-t border-slate-200/60 dark:border-white/[0.06]">
+            <span class="text-blue-600 dark:text-blue-400 font-medium">目标版本</span>
+            <span class="font-mono font-semibold text-blue-600 dark:text-blue-400">
               {{ formatVersionDisplay(updateInfo?.remote_version || updateInfo?.current_version || statusData.version,
                 updateInfo?.remote_commit) }}
             </span>

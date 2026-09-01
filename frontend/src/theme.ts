@@ -62,6 +62,12 @@ export const lightThemeOverrides: GlobalThemeOverrides = {
     itemTextColorHover: '#1e293b',
     itemIconColorHover: '#1669ff',
   },
+  BackTop: {
+    height: '32px',
+    width: '32px',
+    borderRadius: '16px',
+    iconSize: '16px',
+  },
 }
 
 export const darkThemeOverrides: GlobalThemeOverrides = {
@@ -118,6 +124,12 @@ export const darkThemeOverrides: GlobalThemeOverrides = {
   },
   Switch: {
     railColorActive: '#2b7fff',
+  },
+  BackTop: {
+    height: '32px',
+    width: '32px',
+    borderRadius: '16px',
+    iconSize: '16px',
   },
 }
 

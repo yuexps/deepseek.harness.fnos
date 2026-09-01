@@ -149,6 +149,8 @@ export interface SettingsConfig {
   proxy_port: number
   heap_memory_limit?: number
   network_proxy: string
+  proxy_dsh_runtime?: boolean
+  npm_registry?: string
   access_mode?: 'fngateway' | 'port' | 'custom'
   reverse_proxy_url: string
   access_password: string

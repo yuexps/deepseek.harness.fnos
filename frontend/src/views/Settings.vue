@@ -2,7 +2,7 @@
   <div class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
     <!-- 页头与操作区 -->
     <div
-      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full transition-all duration-200">
+      class="sticky -top-[14px] sm:-top-6 z-20 -mt-3.5 sm:-mt-4 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full transition-all duration-200">
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight">应用设置</h1>
 
       <!-- 右侧同行操作按钮组 -->
@@ -195,26 +195,68 @@
             </n-grid>
           </n-card>
 
-          <!-- 外网代理卡片 -->
-          <n-card title="网络代理" :bordered="false" class="shadow-sm rounded-2xl">
-            <n-form-item label="网络代理地址" path="network_proxy">
-              <template #label>
-                <div class="flex items-center gap-1.5">
-                  <span>网络代理地址 (HTTP / SOCKS5)</span>
-                  <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
-                    <template #trigger>
-                      <n-icon size="14"
-                        class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
-                        <Help />
-                      </n-icon>
-                    </template>
-                    用于 Git Clone 拉取仓库，留空使用系统直连
-                  </n-tooltip>
+          <!-- 网络与依赖源卡片 -->
+          <n-card title="网络与依赖源" :bordered="false" class="shadow-sm rounded-2xl">
+            <div class="space-y-4">
+              <n-form-item path="npm_registry">
+                <template #label>
+                  <div class="flex items-center gap-1.5">
+                    <span>NPM 依赖源</span>
+                    <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                      <template #trigger>
+                        <n-icon size="14"
+                          class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <Help />
+                        </n-icon>
+                      </template>
+                      用于插件安装与项目构建时的 npm/pnpm 依赖包下载
+                    </n-tooltip>
+                  </div>
+                </template>
+                <n-select v-model:value="config.npm_registry" :options="npmRegistryOptions" />
+              </n-form-item>
+
+              <n-form-item path="network_proxy">
+                <template #label>
+                  <div class="flex items-center gap-1.5">
+                    <span>网络代理地址 (HTTP / SOCKS5)</span>
+                    <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                      <template #trigger>
+                        <n-icon size="14"
+                          class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <Help />
+                        </n-icon>
+                      </template>
+                      用于 GitHub 源码克隆与版本检测，留空使用系统直连
+                    </n-tooltip>
+                  </div>
+                </template>
+                <n-input v-model:value="config.network_proxy"
+                  placeholder="例如 http://192.168.1.100:7890 或 socks5://192.168.1.100:7890" clearable />
+              </n-form-item>
+
+              <div class="pt-3 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-sm font-medium text-slate-800 dark:text-slate-100">应用于 DSH 服务进程</span>
+                    <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                      <template #trigger>
+                        <n-icon size="14"
+                          class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                          <Help />
+                        </n-icon>
+                      </template>
+                      启用后向 Node.js 进程注入 HTTP_PROXY / HTTPS_PROXY 并设置 NODE_USE_ENV_PROXY=1
+                    </n-tooltip>
+                  </div>
+                  <n-switch v-model:value="config.proxy_dsh_runtime" :disabled="!config.network_proxy?.trim()"
+                    size="medium" class="shrink-0" />
                 </div>
-              </template>
-              <n-input v-model:value="config.network_proxy"
-                placeholder="例如 http://192.168.1.100:7890 或 socks5://192.168.1.100:7890" clearable />
-            </n-form-item>
+                <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                  启用后让 DSH 使用网络代理访问外部网络。
+                </div>
+              </div>
+            </div>
           </n-card>
 
           <!-- 运行环境重置卡片 -->
@@ -291,7 +333,8 @@ const {
   configLoaded,
   isChanged,
   isServerPortChanged,
-  isHeapMemoryChanged
+  isHeapMemoryChanged,
+  isProxyDshChanged
 } = storeToRefs(configStore)
 
 // 堆内存上限选项
@@ -302,6 +345,14 @@ const heapMemoryOptions = [
   { label: '6 GB', value: 6 },
   { label: '8 GB', value: 8 },
   { label: '10 GB', value: 10 }
+]
+
+// NPM 依赖源选项
+const npmRegistryOptions = [
+  { label: '淘宝镜像源 (npmmirror.com)', value: 'https://registry.npmmirror.com' },
+  { label: '腾讯云镜像源 (cloud.tencent.com)', value: 'https://mirrors.cloud.tencent.com/npm/' },
+  { label: '华为云镜像源 (huaweicloud.com)', value: 'https://repo.huaweicloud.com/repository/npm/' },
+  { label: 'npm 官方源 (npmjs.org)', value: 'https://registry.npmjs.org' }
 ]
 
 watch(isChanged, (changed) => {
@@ -411,8 +462,8 @@ async function handleSave() {
     return
   }
 
-  // 端口或内存变更时提示重启
-  if ((isServerPortChanged.value || isHeapMemoryChanged.value) && systemStore.isRunning) {
+  // 端口、内存或 DSH 运行时代理变更时提示重启
+  if ((isServerPortChanged.value || isHeapMemoryChanged.value || isProxyDshChanged.value) && systemStore.isRunning) {
     const changes: string[] = []
     if (isServerPortChanged.value) {
       changes.push(`内部监听端口已由 ${savedConfig.value?.server_port || 2298} 变更为 ${config.value.server_port}`)
@@ -421,6 +472,10 @@ async function handleSave() {
       const oldMem = savedConfig.value?.heap_memory_limit ? `${savedConfig.value.heap_memory_limit} GB` : '自动'
       const newMem = config.value.heap_memory_limit ? `${config.value.heap_memory_limit} GB` : '自动'
       changes.push(`堆内存上限已由 ${oldMem} 变更为 ${newMem}`)
+    }
+    if (isProxyDshChanged.value) {
+      const isNowEnabled = Boolean(config.value.network_proxy?.trim()) && Boolean(config.value.proxy_dsh_runtime)
+      changes.push(`DSH 服务进程代理已${isNowEnabled ? '启用' : '关闭'}`)
     }
 
     dialog.warning({

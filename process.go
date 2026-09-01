@@ -179,45 +179,46 @@ func StartWatchdog() {
 // inspectAndHeal 主动巡检与自愈维护
 func inspectAndHeal() {
 	curStatus := state.Status()
+	cfg := GetConfig()
+	port := cfg.ServerPort
+	if port <= 0 {
+		port = 2298
+	}
 
 	if curStatus == StatusRunning {
 		procMu.Lock()
 		mp := process
-		var pid int
+		var managedPid int
 		if mp != nil && mp.cmd != nil && mp.cmd.Process != nil {
-			pid = mp.cmd.Process.Pid
+			managedPid = mp.cmd.Process.Pid
 		}
 		procMu.Unlock()
 
-		// 运行状态下探活：如果内存无句柄或主 PID 已死，执行清理并纠偏
-		if pid <= 0 || !isProcessAlive(pid) {
-			LogWarning("巡检发现服务主进程已终止 (PID=%d)，执行状态自愈与残留清理", pid)
-			procMu.Lock()
-			if process == mp {
-				process = nil
-				if pid > 0 {
-					removePidFileIfMatches(pid)
-				}
-				stopReverseProxy()
-				// 清理端口上可能霸占的孤儿进程
-				cfg := GetConfig()
-				port := cfg.ServerPort
-				if port <= 0 {
-					port = 2298
-				}
-				for _, orphanPid := range findPidsOnPort(port) {
-					LogInfo("清理霸占端口 %d 的孤儿残留进程 (PID=%d)", port, orphanPid)
-					killProcessTree(orphanPid)
-					_ = killProcessGroup(orphanPid)
-				}
-				state.SetStatus(StatusStopped, "巡检发现进程已异常终止")
-			}
-			procMu.Unlock()
+		// 检查原本被托管的 PID 是否依然存活
+		if managedPid > 0 && isProcessAlive(managedPid) {
+			return
 		}
+
+		// 检查端口上是否依然有活跃的进程（例如子进程分叉）
+		if pids := findPidsOnPort(port); len(pids) > 0 && isProcessAlive(pids[0]) {
+			return
+		}
+
+		// 端口无进程且原 PID 已死，确认为真正终止
+		LogWarning("巡检发现服务主进程已终止 (PID=%d) 且端口 %d 无响应，执行状态清理", managedPid, port)
+		procMu.Lock()
+		if process == mp {
+			process = nil
+			if managedPid > 0 {
+				removePidFileIfMatches(managedPid)
+			}
+			stopReverseProxy()
+			state.SetStatus(StatusStopped, "巡检发现服务已异常终止")
+		}
+		procMu.Unlock()
 		return
 	}
 
-	// starting 状态下：若进程已死则纠偏，防止 UI 永久卡在启动中
 	if curStatus == StatusStarting {
 		procMu.Lock()
 		mp := process
@@ -228,6 +229,10 @@ func inspectAndHeal() {
 		procMu.Unlock()
 
 		if pid > 0 && !isProcessAlive(pid) {
+			if pids := findPidsOnPort(port); len(pids) > 0 && isProcessAlive(pids[0]) {
+				return
+			}
+
 			LogWarning("巡检发现 starting 状态进程已死 (PID=%d)，纠偏为 stopped", pid)
 			procMu.Lock()
 			if process == mp {
@@ -242,7 +247,7 @@ func inspectAndHeal() {
 	}
 
 	if curStatus == StatusStopped {
-		// 停止状态下巡检：清理失效的 PID 残留文件
+		// 停止状态下：仅清理失效的 PID 残留文件
 		if data, err := os.ReadFile(pidFilePath()); err == nil {
 			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
 				if !isProcessAlive(pid) {

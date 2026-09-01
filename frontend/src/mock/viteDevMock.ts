@@ -18,6 +18,8 @@ export function viteDevMock(): Plugin {
         proxy_port: 2299,
         heap_memory_limit: 0,
         network_proxy: '',
+        proxy_dsh_runtime: false,
+        npm_registry: 'https://registry.npmmirror.com',
         access_mode: 'fngateway',
         reverse_proxy_url: '',
         access_password: '',

@@ -9,6 +9,8 @@ export const useConfigStore = defineStore('config', () => {
     proxy_port: 2299,
     heap_memory_limit: 0,
     network_proxy: '',
+    proxy_dsh_runtime: false,
+    npm_registry: 'https://registry.npmmirror.com',
     access_mode: 'fngateway',
     reverse_proxy_url: '',
     access_password: '',
@@ -31,6 +33,8 @@ export const useConfigStore = defineStore('config', () => {
       (config.value.heap_memory_limit ?? 0) !== (savedConfig.value.heap_memory_limit ?? 0) ||
       (config.value.access_mode || 'fngateway') !== (savedConfig.value.access_mode || 'fngateway') ||
       (config.value.network_proxy || '') !== (savedConfig.value.network_proxy || '') ||
+      Boolean(config.value.proxy_dsh_runtime) !== Boolean(savedConfig.value.proxy_dsh_runtime) ||
+      (config.value.npm_registry || 'https://registry.npmmirror.com') !== (savedConfig.value.npm_registry || 'https://registry.npmmirror.com') ||
       (config.value.reverse_proxy_url || '') !== (savedConfig.value.reverse_proxy_url || '') ||
       (config.value.access_password || '') !== (savedConfig.value.access_password || '') ||
       Boolean(config.value.enable_builtin_skill ?? true) !== Boolean(savedConfig.value.enable_builtin_skill ?? true)
@@ -53,6 +57,14 @@ export const useConfigStore = defineStore('config', () => {
   const isHeapMemoryChanged = computed(() => {
     if (!savedConfig.value) return false
     return (config.value.heap_memory_limit ?? 0) !== (savedConfig.value.heap_memory_limit ?? 0)
+  })
+
+  // DSH 运行时代理配置是否变更（影响后端运行时环境变量）
+  const isProxyDshChanged = computed(() => {
+    if (!savedConfig.value) return false
+    const oldEffective = Boolean(savedConfig.value.network_proxy) && Boolean(savedConfig.value.proxy_dsh_runtime)
+    const newEffective = Boolean(config.value.network_proxy) && Boolean(config.value.proxy_dsh_runtime)
+    return oldEffective !== newEffective || (newEffective && config.value.network_proxy !== savedConfig.value.network_proxy)
   })
 
   // 放弃修改，还原为当前已保存的服务器配置
@@ -79,6 +91,12 @@ export const useConfigStore = defineStore('config', () => {
         if (data.enable_builtin_skill === undefined) {
           data.enable_builtin_skill = true
         }
+        if (data.proxy_dsh_runtime === undefined) {
+          data.proxy_dsh_runtime = false
+        }
+        if (!data.npm_registry) {
+          data.npm_registry = 'https://registry.npmmirror.com'
+        }
         config.value = { ...data }
         savedConfig.value = { ...data }
         configLoaded.value = true
@@ -101,6 +119,9 @@ export const useConfigStore = defineStore('config', () => {
     }
     saving.value = true
     try {
+      if (!config.value.network_proxy?.trim()) {
+        config.value.proxy_dsh_runtime = false
+      }
       const res = await configApi.saveConfig(config.value)
       if (res.success && res.data) {
         savedConfig.value = { ...config.value }
@@ -123,6 +144,7 @@ export const useConfigStore = defineStore('config', () => {
     isServerPortChanged,
     isProxyPortChanged,
     isHeapMemoryChanged,
+    isProxyDshChanged,
     fetchConfig,
     saveConfig,
     resetConfig

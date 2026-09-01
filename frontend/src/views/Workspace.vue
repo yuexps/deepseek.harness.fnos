@@ -2,7 +2,7 @@
   <div class="w-full flex-1 flex flex-col gap-4 sm:gap-6">
     <!-- 页头标题 -->
     <div
-      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 transition-all duration-200">
+      class="sticky -top-[14px] sm:-top-6 z-20 -mt-3.5 sm:-mt-4 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 transition-all duration-200">
       <div class="flex items-baseline gap-2.5 min-w-0">
         <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">工作区</h1>
         <span v-if="items.length" class="text-xs text-slate-400 dark:text-slate-500 font-medium truncate">
@@ -14,12 +14,7 @@
         <template #trigger>
           <n-button secondary size="small" class="sm:!h-9 sm:!px-4" :disabled="!dataLibraryPath"
             @click="handleOpenDataLibrary">
-            <template #icon>
-              <n-icon>
-                <Folder />
-              </n-icon>
-            </template>
-            <span>数据目录</span>
+            数据目录
           </n-button>
         </template>
         {{ dataLibraryPath ? `在文件管理中打开: ${dataLibraryPath}` : '数据目录路径未配置' }}

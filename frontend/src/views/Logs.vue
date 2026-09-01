@@ -3,7 +3,7 @@
     class="w-full h-[calc(100dvh-82px)] sm:h-[calc(100dvh-48px)] flex flex-col gap-3 sm:gap-4 min-h-0 overflow-hidden select-none">
     <!-- 页头标题与操作栏 -->
     <div
-      class="sticky -top-[14px] sm:-top-6 z-20 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full min-w-0 shrink-0 transition-all duration-200">
+      class="sticky -top-[14px] sm:-top-6 z-20 -mt-3.5 sm:-mt-4 pt-5 sm:pt-7 pb-2 sm:pb-2.5 bg-[#f5f7fa]/90 dark:bg-[#12141a]/90 backdrop-blur-md flex items-center justify-between gap-3 w-full min-w-0 shrink-0 transition-all duration-200">
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">运行日志</h1>
 
       <!-- 右侧操作栏：自动滚动 / 下载 / 清空 -->

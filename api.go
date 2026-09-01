@@ -138,7 +138,10 @@ func statusPayload() gin.H {
 
 	var pidVal any
 	if (status == StatusRunning || status == StatusStarting) {
-		if data, err := os.ReadFile(pidFilePath()); err == nil {
+		// 优先获取当前正在监听内部端口的实际活跃 PID，确保派生子进程时 PID 实时精准
+		if pids := findPidsOnPort(serverPort); len(pids) > 0 && isProcessAlive(pids[0]) {
+			pidVal = pids[0]
+		} else if data, err := os.ReadFile(pidFilePath()); err == nil {
 			if p, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && p > 0 && isProcessAlive(p) {
 				pidVal = p
 			}
@@ -530,6 +533,10 @@ func handleSaveConfig(c *gin.Context) {
 	serverPortChanged := oldCfg.ServerPort != cfg.ServerPort
 	proxyPortChanged := oldCfg.ProxyPort != cfg.ProxyPort
 	heapMemChanged := oldCfg.HeapMemoryLimit != cfg.HeapMemoryLimit
+	oldProxyDshEffective := oldCfg.NetworkProxy != "" && oldCfg.IsProxyDshRuntimeEnabled()
+	newProxyDshEffective := cfg.NetworkProxy != "" && cfg.IsProxyDshRuntimeEnabled()
+	proxyDshChanged := (oldProxyDshEffective != newProxyDshEffective) ||
+		(newProxyDshEffective && oldCfg.NetworkProxy != cfg.NetworkProxy)
 
 	if serverPortChanged {
 		if err := checkPortAvailable(cfg.ServerPort); err != nil {
@@ -565,6 +572,13 @@ func handleSaveConfig(c *gin.Context) {
 	} else if heapMemChanged {
 		if state.Status() == StatusRunning {
 			LogInfo("堆内存上限已变更 (%dG → %dG)，正在自动重启服务", oldCfg.HeapMemoryLimit, cfg.HeapMemoryLimit)
+			go func() {
+				_ = Restart()
+			}()
+		}
+	} else if proxyDshChanged {
+		if state.Status() == StatusRunning {
+			LogInfo("DSH 运行时网络代理配置已变更，正在自动重启服务以应用新环境变量")
 			go func() {
 				_ = Restart()
 			}()

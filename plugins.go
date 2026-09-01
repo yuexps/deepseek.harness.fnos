@@ -26,6 +26,7 @@ const (
 
 // pluginEnv 注入网络超时与重试收敛参数，防止 npm/pnpm 无限挂起
 func pluginEnv() []string {
+	registry := GetConfig().GetNpmRegistry()
 	return append(os.Environ(),
 		"NPM_CONFIG_FETCH_TIMEOUT=30000",
 		"NPM_CONFIG_NETWORK_TIMEOUT=30000",
@@ -35,8 +36,10 @@ func pluginEnv() []string {
 		"PNPM_CONFIG_FETCH_TIMEOUT=30000",
 		"PNPM_CONFIG_NETWORK_TIMEOUT=30000",
 		"PNPM_CONFIG_FETCH_RETRIES=2",
-		"PNPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
-		"NPM_CONFIG_REGISTRY=https://registry.npmmirror.com",
+		"PNPM_CONFIG_REGISTRY="+registry,
+		"NPM_CONFIG_REGISTRY="+registry,
+		"pnpm_config_registry="+registry,
+		"npm_config_registry="+registry,
 		"PNPM_CONFIG_MINIMUM_RELEASE_AGE=0",
 		"pnpm_config_minimum_release_age=0",
 	)

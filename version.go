@@ -70,7 +70,6 @@ func fetchAppRemoteUpdate() {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		LogWarning("[版本检测] 检查更新失败: %s", err)
 		return
 	}
 	defer resp.Body.Close()
@@ -81,15 +80,17 @@ func fetchAppRemoteUpdate() {
 		rVer := strings.TrimPrefix(strings.TrimSpace(tag), "v")
 		if rVer != "" && rVer != "latest" {
 			cachedAppCheckMutex.Lock()
+			oldRemoteVer := cachedAppRemoteVer
 			cachedAppRemoteVer = rVer
 			cachedAppCheckMutex.Unlock()
+
 			cleanLocal := strings.TrimPrefix(strings.TrimSpace(localVer), "v")
-			LogInfo("[版本检测] 远端最新版本为 v%s，当前版本为 v%s", rVer, cleanLocal)
+			if CompareSemver(rVer, cleanLocal) > 0 && rVer != oldRemoteVer {
+				LogInfo("[版本检测] 发现新版本 v%s (当前版本 v%s)", rVer, cleanLocal)
+			}
 			return
 		}
 	}
-
-	LogWarning("[版本检测] 检查更新失败: HTTP %d", resp.StatusCode)
 }
 
 // StartAppUpdateChecker 启动后台版本检查轮询

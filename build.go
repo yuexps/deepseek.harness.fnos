@@ -354,7 +354,7 @@ func installPnpm() error {
 	}
 	pnpmDir := filepath.Join(pkgVarDir, "pnpm-env")
 	_ = os.MkdirAll(pnpmDir, 0755)
-	return runCmd(pnpmDir, npmBin(), "install", "pnpm", "--registry=https://registry.npmmirror.com")
+	return runCmd(pnpmDir, npmBin(), "install", "pnpm", "--registry="+GetConfig().GetNpmRegistry())
 }
 
 func ensureTool(bin, pkg string) error {
@@ -414,7 +414,7 @@ func buildFromSource(forceClean bool) error {
 	}
 
 	state.SetStatus(StatusBuilding, "正在安装依赖...")
-	pnpmArgs := []string{"install", "--prefer-offline", "--config.confirm-modules-purge=false", "--registry", "https://registry.npmmirror.com"}
+	pnpmArgs := []string{"install", "--prefer-offline", "--config.confirm-modules-purge=false", "--registry", GetConfig().GetNpmRegistry()}
 	if forceClean {
 		pnpmArgs = append(pnpmArgs, "--force")
 	}

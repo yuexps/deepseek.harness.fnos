@@ -407,13 +407,16 @@ func startLocked() error {
 	cmd.Stderr = NewLogWriterWarn()
 	setProcessGroup(cmd)
 
+	ApplyProxyEnv()
+	cmdEnv := append([]string{}, os.Environ()...)
 	if cfg.HeapMemoryLimit > 0 {
 		nodeOpt := fmt.Sprintf("--max-old-space-size=%d", cfg.HeapMemoryLimit*1024)
 		if existingOpt := os.Getenv("NODE_OPTIONS"); existingOpt != "" {
 			nodeOpt = existingOpt + " " + nodeOpt
 		}
-		cmd.Env = append(os.Environ(), "NODE_OPTIONS="+nodeOpt)
+		cmdEnv = append(cmdEnv, "NODE_OPTIONS="+nodeOpt)
 	}
+	cmd.Env = cmdEnv
 
 	if err := cmd.Start(); err != nil {
 		state.SetStatus(StatusStopped, "启动失败: "+err.Error())
