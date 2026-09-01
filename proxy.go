@@ -36,6 +36,9 @@ import (
 //go:embed templates/auth_login.html
 var authLoginPageTplContent string
 
+//go:embed templates/pwa-icon.svg
+var pwaIconSvgBytes []byte
+
 var authLoginPageTpl = template.Must(template.New("auth_login").Parse(authLoginPageTplContent))
 
 const (
@@ -240,7 +243,13 @@ func proxyWithAuth(next http.Handler) http.Handler {
 		}
 
 		// 放行公开静态元数据（避免 PWA 清单与图标因浏览器默认无凭证请求而触发登录页拦截）
-		if r.URL.Path == "/manifest.webmanifest" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon.ico" {
+		if r.URL.Path == "/manifest.webmanifest" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/pwa-icon.svg" {
+			if r.URL.Path == "/pwa-icon.svg" && len(pwaIconSvgBytes) > 0 {
+				w.Header().Set("Content-Type", "image/svg+xml")
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+				_, _ = w.Write(pwaIconSvgBytes)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -523,6 +532,19 @@ func startReverseProxyLocked() error {
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
 			}
 
+			// 拦截并改写 PWA Web App Manifest 的应用图标路径
+			if (strings.Contains(contentType, "manifest+json") || (resp.Request != nil && strings.HasSuffix(resp.Request.URL.Path, ".webmanifest"))) && resp.Body != nil {
+				bodyBytes, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err == nil {
+					modified := rewriteProxyManifest(bodyBytes)
+					resp.Body = io.NopCloser(bytes.NewReader(modified))
+					resp.ContentLength = int64(len(modified))
+					resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+					resp.Header.Set("Content-Type", "application/manifest+json; charset=utf-8")
+				}
+			}
+
 			return nil
 		},
 		ErrorHandler: errHandler,
@@ -750,5 +772,25 @@ func hasDshAuthCookie(cookieHeader string) bool {
 		}
 	}
 	return false
+}
+
+// rewriteProxyManifest 注入修改 PWA manifest 中的应用图标为 /pwa-icon.svg
+func rewriteProxyManifest(body []byte) []byte {
+	var manifest map[string]any
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return body
+	}
+	if icons, ok := manifest["icons"].([]any); ok {
+		for _, ic := range icons {
+			if icMap, ok := ic.(map[string]any); ok {
+				icMap["src"] = "/pwa-icon.svg"
+			}
+		}
+	}
+	newBytes, err := json.Marshal(manifest)
+	if err != nil {
+		return body
+	}
+	return newBytes
 }
 

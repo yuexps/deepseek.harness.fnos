@@ -437,29 +437,27 @@ func startLocked() error {
 		err := mp.cmd.Wait()
 
 		procMu.Lock()
-		current := process
-		if current == mp {
-			process = nil
-			SetCurrentLaunchToken("")
-			removePidFileIfMatches(mp.cmd.Process.Pid)
-			stopReverseProxy()
-
-			if mp.stopRequested {
-				LogInfo("服务主进程已按要求停止 (PID=%d)", mp.cmd.Process.Pid)
-				state.SetStatus(StatusStopped, "")
-			} else if err != nil {
-				LogWarning("服务主进程异常退出 (PID=%d): %s", mp.cmd.Process.Pid, err)
-				state.SetStatus(StatusStopped, "进程意外退出: "+err.Error())
-			} else {
-				LogInfo("服务主进程正常退出 (PID=%d)", mp.cmd.Process.Pid)
+		if mp.stopRequested {
+			if process == mp {
+				process = nil
+				SetCurrentLaunchToken("")
+				removePidFileIfMatches(mp.Pid())
+				stopReverseProxy()
+				LogInfo("服务主进程已按要求停止 (PID=%d)", mp.Pid())
 				state.SetStatus(StatusStopped, "")
 			}
-		} else {
-			removePidFileIfMatches(mp.cmd.Process.Pid)
+			procMu.Unlock()
+			mp.closeDone()
+			return
 		}
 		procMu.Unlock()
 
-		close(mp.done)
+		// 非主动退出由看门狗接管
+		if err != nil {
+			LogWarning("服务主进程异常退出 (PID=%d): %s", mp.Pid(), err)
+		} else {
+			LogInfo("服务主进程退出 (PID=%d)", mp.Pid())
+		}
 	}(mp)
 
 	return nil
@@ -470,16 +468,35 @@ func stopAndWait() {
 
 	procMu.Lock()
 	mp := process
+	var pid int
 	if mp != nil {
 		mp.stopRequested = true
-		LogInfo("终止服务主进程 (PID=%d)", mp.cmd.Process.Pid)
-		killProcessGroup(mp.cmd.Process.Pid)
-		removePidFileIfMatches(mp.cmd.Process.Pid)
+		pid = mp.Pid()
+		LogInfo("终止服务主进程 (PID=%d)", pid)
+		killProcessTree(pid)
+		killProcessGroup(pid)
+		removePidFileIfMatches(pid)
 	}
 	procMu.Unlock()
 
 	if mp != nil {
-		<-mp.done
+		// 等待目标进程消亡
+		deadline := time.Now().Add(1 * time.Second)
+		for time.Now().Before(deadline) {
+			if pid > 0 && !isProcessAlive(pid) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		mp.closeDone()
+
+		procMu.Lock()
+		if process == mp {
+			process = nil
+			SetCurrentLaunchToken("")
+		}
+		procMu.Unlock()
+		state.SetStatus(StatusStopped, "")
 	}
 }
 
@@ -560,7 +577,7 @@ func waitAndActivateReverseProxy(mp *managedProcess, port int) {
 
 			if ready {
 				procMu.Lock()
-				if process == mp && !mp.stopRequested && mp.cmd != nil && mp.cmd.Process != nil && isProcessAlive(mp.cmd.Process.Pid) {
+				if process == mp && !mp.stopRequested && isProcessAlive(mp.Pid()) {
 					startReverseProxy()
 					state.SetStatus(StatusRunning, "")
 					SetLastRunState(StatusRunning)

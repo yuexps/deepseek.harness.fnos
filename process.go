@@ -14,8 +14,32 @@ import (
 
 type managedProcess struct {
 	cmd           *exec.Cmd
+	adoptedPid    int
 	stopRequested bool
+	failCount     int
 	done          chan struct{}
+	doneOnce      sync.Once
+}
+
+func (mp *managedProcess) Pid() int {
+	if mp == nil {
+		return 0
+	}
+	if mp.adoptedPid > 0 {
+		return mp.adoptedPid
+	}
+	if mp.cmd != nil && mp.cmd.Process != nil {
+		return mp.cmd.Process.Pid
+	}
+	return 0
+}
+
+func (mp *managedProcess) closeDone() {
+	if mp != nil {
+		mp.doneOnce.Do(func() {
+			close(mp.done)
+		})
+	}
 }
 
 var (
@@ -108,6 +132,41 @@ func findPidsOnPort(port int) []int {
 	return pids
 }
 
+// isDshProcess 检查进程是否属于 DSH 服务
+func isDshProcess(pid int) bool {
+	if pid <= 0 || srcDir == "" {
+		return false
+	}
+	if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid)); err == nil && strings.HasPrefix(cwd, srcDir) {
+		return true
+	}
+	if data, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid)); err == nil {
+		cmdline := string(data)
+		return strings.Contains(cmdline, srcDir) || strings.Contains(cmdline, "deepseek-harness")
+	}
+	return false
+}
+
+// findDshPidsOnPort 获取指定端口上的 DSH 进程 PID 列表
+func findDshPidsOnPort(port int) []int {
+	var dshPids []int
+	for _, pid := range findPidsOnPort(port) {
+		if isProcessAlive(pid) && isDshProcess(pid) {
+			dshPids = append(dshPids, pid)
+		}
+	}
+	return dshPids
+}
+
+// findDshPidOnPort 获取指定端口上的首个 DSH 进程 PID
+func findDshPidOnPort(port int) int {
+	pids := findDshPidsOnPort(port)
+	if len(pids) > 0 {
+		return pids[0]
+	}
+	return 0
+}
+
 // waitForPortFree 循环检测端口是否彻底释放（最多等待 500ms）
 func waitForPortFree(port int) {
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -122,11 +181,14 @@ func waitForPortFree(port int) {
 // killHarnessLocked 彻底终止：清理进程组并深度排查端口残留
 func killHarnessLocked() {
 	// 清理内存记录的进程句柄
-	if process != nil && process.cmd != nil && process.cmd.Process != nil {
-		pid := process.cmd.Process.Pid
-		LogInfo("清理运行进程组 (PGID=%d)", pid)
-		_ = killProcessGroup(pid)
-		removePidFileIfMatches(pid)
+	if process != nil {
+		pid := process.Pid()
+		if pid > 0 {
+			LogInfo("清理运行进程 (PID=%d)", pid)
+			killProcessTree(pid)
+			_ = killProcessGroup(pid)
+			removePidFileIfMatches(pid)
+		}
 		process = nil
 	}
 
@@ -140,16 +202,22 @@ func killHarnessLocked() {
 		}
 	}
 
-	// 清理占用端口的残留进程
+	// 清理端口上的 DSH 残留进程
 	cfg := GetConfig()
 	port := cfg.ServerPort
 	if port <= 0 {
 		port = 2298
 	}
 	for _, pid := range findPidsOnPort(port) {
-		LogInfo("端口 %d 被残留进程 (PID=%d) 占用，执行强制终止", port, pid)
-		killProcessTree(pid)
-		_ = killProcessGroup(pid)
+		if isProcessAlive(pid) {
+			if isDshProcess(pid) {
+				LogInfo("终止端口 %d 残留进程 (PID=%d)", port, pid)
+				killProcessTree(pid)
+				_ = killProcessGroup(pid)
+			} else {
+				LogWarning("检测到端口 %d 被非 DSH 进程占用 (PID=%d)，请检查！", port, pid)
+			}
+		}
 	}
 
 	// 等待端口完全释放
@@ -167,7 +235,7 @@ func KillHarness() {
 // StartWatchdog 启动后台健康巡检与主动自愈协程
 func StartWatchdog() {
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {
@@ -185,63 +253,62 @@ func inspectAndHeal() {
 		port = 2298
 	}
 
-	if curStatus == StatusRunning {
+	if curStatus == StatusRunning || curStatus == StatusStarting {
 		procMu.Lock()
 		mp := process
-		var managedPid int
-		if mp != nil && mp.cmd != nil && mp.cmd.Process != nil {
-			managedPid = mp.cmd.Process.Pid
+		var currentPid int
+		if mp != nil {
+			currentPid = mp.Pid()
 		}
 		procMu.Unlock()
 
 		// 检查原本被托管的 PID 是否依然存活
-		if managedPid > 0 && isProcessAlive(managedPid) {
+		if currentPid > 0 && isProcessAlive(currentPid) {
+			if mp != nil {
+				mp.failCount = 0
+			}
 			return
 		}
 
-		// 检查端口上是否依然有活跃的进程（例如子进程分叉）
-		if pids := findPidsOnPort(port); len(pids) > 0 && isProcessAlive(pids[0]) {
+		// 检查端口是否有活跃子进程
+		if adopted := findDshPidOnPort(port); adopted > 0 {
+			if mp != nil {
+				mp.failCount = 0
+			}
+			if adopted != currentPid {
+				LogInfo("接管端口 %d 活跃子进程 (PID=%d)", port, adopted)
+				procMu.Lock()
+				if process == mp && mp != nil {
+					mp.adoptedPid = adopted
+					_ = os.WriteFile(pidFilePath(), []byte(strconv.Itoa(adopted)), 0644)
+				}
+				procMu.Unlock()
+				state.Poke()
+			}
 			return
 		}
 
-		// 端口无进程且原 PID 已死，确认为真正终止
-		LogWarning("巡检发现服务主进程已终止 (PID=%d) 且端口 %d 无响应，执行状态清理", managedPid, port)
+		// 容忍连续 3 次未就绪
+		if mp != nil {
+			mp.failCount++
+			if mp.failCount <= 3 {
+				return
+			}
+		}
+
+		LogWarning("服务主进程已终止 (PID=%d) 且端口 %d 无响应，执行清理", currentPid, port)
 		procMu.Lock()
 		if process == mp {
 			process = nil
-			if managedPid > 0 {
-				removePidFileIfMatches(managedPid)
+			if currentPid > 0 {
+				removePidFileIfMatches(currentPid)
 			}
 			stopReverseProxy()
-			state.SetStatus(StatusStopped, "巡检发现服务已异常终止")
+			state.SetStatus(StatusStopped, "服务进程异常终止")
 		}
 		procMu.Unlock()
-		return
-	}
-
-	if curStatus == StatusStarting {
-		procMu.Lock()
-		mp := process
-		var pid int
-		if mp != nil && mp.cmd != nil && mp.cmd.Process != nil {
-			pid = mp.cmd.Process.Pid
-		}
-		procMu.Unlock()
-
-		if pid > 0 && !isProcessAlive(pid) {
-			if pids := findPidsOnPort(port); len(pids) > 0 && isProcessAlive(pids[0]) {
-				return
-			}
-
-			LogWarning("巡检发现 starting 状态进程已死 (PID=%d)，纠偏为 stopped", pid)
-			procMu.Lock()
-			if process == mp {
-				process = nil
-				removePidFileIfMatches(pid)
-				stopReverseProxy()
-				state.SetStatus(StatusStopped, "服务进程启动期间意外退出")
-			}
-			procMu.Unlock()
+		if mp != nil {
+			mp.closeDone()
 		}
 		return
 	}
