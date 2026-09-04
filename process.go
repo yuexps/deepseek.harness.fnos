@@ -236,11 +236,6 @@ func killHarnessLocked() {
 	waitForPortFree(port)
 
 	_ = os.Remove(pidFilePath())
-
-	usageCacheMu.Lock()
-	cachedCpu = "-"
-	cachedMem = "-"
-	usageCacheMu.Unlock()
 }
 
 func KillHarness() {
