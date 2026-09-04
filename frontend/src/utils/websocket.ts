@@ -1,4 +1,4 @@
-import type { WSEnvelope, StatusData, WorkspaceData, PluginStatus, SnapshotSummary } from '../types/api'
+import type { WSEnvelope, StatusData, WorkspaceData, PluginStatus, SnapshotSummary, SnapshotProgressTask } from '../types/api'
 
 export type WSEventMap = {
   status: StatusData
@@ -10,6 +10,7 @@ export type WSEventMap = {
   pong: { server_time: number }
   connectionChange: boolean
   reconnected: void
+  snapshot_progress: SnapshotProgressTask
 }
 
 type EventCallback<K extends keyof WSEventMap> = (data: WSEventMap[K]) => void

@@ -5,6 +5,7 @@ import { useSystemStore } from './system'
 import { useWorkspaceStore } from './workspace'
 import { usePluginStore } from './plugin'
 import { useLogStore } from './log'
+import { useSnapshotStore } from './snapshot'
 
 export const useAppStore = defineStore('app', () => {
   const currentTab = ref('overview')
@@ -22,6 +23,7 @@ export const useAppStore = defineStore('app', () => {
     const workspaceStore = useWorkspaceStore()
     const pluginStore = usePluginStore()
     const logStore = useLogStore()
+    const snapshotStore = useSnapshotStore()
 
     systemStore.startClock()
 
@@ -42,6 +44,14 @@ export const useAppStore = defineStore('app', () => {
       pluginStore.updatePluginStatus(status)
     })
 
+    wsClient.on('snapshot', (data) => {
+      snapshotStore.updateSummary(data)
+    })
+
+    wsClient.on('snapshot_progress', (data) => {
+      snapshotStore.updateProgress(data)
+    })
+
     wsClient.on('usage', (data) => {
       systemStore.updateUsage(data.cpu, data.memory)
     })
@@ -51,9 +61,10 @@ export const useAppStore = defineStore('app', () => {
     })
 
     wsClient.on('reconnected', () => {
-      // 重新连接后主动拉取一次最新工作区与插件与日志
+      // 重新连接后主动拉取一次最新工作区、插件、快照与日志
       workspaceStore.fetchWorkspaces()
       pluginStore.fetchPlugins()
+      snapshotStore.fetchSnapshots()
       logStore.fetchLogs()
     })
 

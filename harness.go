@@ -184,7 +184,7 @@ func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 		installedVer := readVersion()
 		if isUpgrade && installedVer != "" && zipVer != "" {
 			state.SetStatus(StatusBuilding, fmt.Sprintf("正在升级部署预构建包 (v%s → v%s)...", installedVer, zipVer))
-			LogInfo("检测到新版本预构建包 (v%s → v%s)，正在安全部署: %s", installedVer, zipVer, tarPath)
+			LogInfo("检测到新版本预构建包 (v%s → v%s)，开始部署: %s", installedVer, zipVer, tarPath)
 		} else {
 			state.SetStatus(StatusBuilding, "正在解压部署内置预构建包...")
 			LogInfo("解压部署预构建包: %s (版本: v%s)", tarPath, zipVer)

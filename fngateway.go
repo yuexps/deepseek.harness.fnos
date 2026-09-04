@@ -825,7 +825,7 @@ func serveFnGatewayStatusPage(w http.ResponseWriter, r *http.Request, err error)
 		isStarting = true
 	case StatusSnapshotting:
 		title = "快照维护中"
-		desc = "正在安全执行系统快照备份或还原操作"
+		desc = "正在执行快照备份或还原操作"
 		badgeClass = "badge-starting"
 		badgeText = "快照中"
 		isStarting = true

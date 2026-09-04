@@ -6,8 +6,7 @@
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">概览</h1>
 
       <!-- 右侧构建时间 -->
-      <span v-if="statusData.build_time"
-        class="text-xs font-mono text-slate-400 dark:text-slate-500 truncate"
+      <span v-if="statusData.build_time" class="text-xs font-mono text-slate-400 dark:text-slate-500 truncate"
         :title="`Build: ${statusData.build_time}`">
         Build: {{ statusData.build_time }}
       </span>
@@ -81,7 +80,8 @@
             <div
               class="order-2 sm:order-3 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">进程 PID</span>
-              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+              <div
+                class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
                 :title="isRunning && statusData.pid ? String(statusData.pid) : '-'">
                 {{ isRunning && statusData.pid ? statusData.pid : '-' }}
               </div>
@@ -91,7 +91,8 @@
             <div
               class="order-3 sm:order-4 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">CPU 占用</span>
-              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+              <div
+                class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
                 :title="dshCpu">
                 {{ dshCpu }}
               </div>
@@ -101,7 +102,8 @@
             <div
               class="order-4 sm:order-5 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">内存占用</span>
-              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+              <div
+                class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
                 :title="dshMemory">
                 {{ dshMemory }}
               </div>
@@ -111,7 +113,8 @@
             <div
               class="order-5 sm:order-2 col-span-2 sm:col-span-1 py-2 sm:py-3.5 px-3.5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行时间</span>
-              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5">
+              <div
+                class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5">
                 {{ uptimeText }}
               </div>
             </div>
@@ -160,8 +163,8 @@
     <!-- 底部状态通知区 -->
     <div v-auto-animate class="space-y-3">
       <!-- 实时构建进度 / 启动中 / 快照中 / 错误信息 -->
-      <n-alert v-if="statusData.last_message" :type="isBuilding || isStarting || isSnapshotting ? 'info' : 'warning'" :show-icon="true"
-        class="rounded-2xl shadow-sm">
+      <n-alert v-if="statusData.last_message" :type="isBuilding || isStarting || isSnapshotting ? 'info' : 'warning'"
+        :show-icon="true" class="rounded-2xl shadow-sm">
         {{ statusData.last_message }}
       </n-alert>
 
@@ -186,7 +189,8 @@
                 statusData.commit) }}
             </span>
           </div>
-          <div class="flex items-center justify-between text-xs pt-2 border-t border-slate-200/60 dark:border-white/[0.06]">
+          <div
+            class="flex items-center justify-between text-xs pt-2 border-t border-slate-200/60 dark:border-white/[0.06]">
             <span class="text-blue-600 dark:text-blue-400 font-medium">目标版本</span>
             <span class="font-mono font-semibold text-blue-600 dark:text-blue-400">
               {{ formatVersionDisplay(updateInfo?.remote_version || updateInfo?.current_version || statusData.version,
@@ -195,20 +199,26 @@
           </div>
         </div>
 
-        <!-- 强警示高危警告区 -->
-        <div class="p-3 rounded-xl bg-rose-500/[0.08] dark:bg-rose-500/[0.15] border border-rose-500/30 space-y-1.5">
-          <div class="font-bold text-rose-600 dark:text-rose-400 text-xs tracking-wide flex items-center gap-1.5">
+        <!-- 警示与快照防护提示区 -->
+        <div class="p-3 rounded-xl bg-amber-500/[0.08] dark:bg-amber-500/[0.15] border border-amber-500/30 space-y-2">
+          <div class="font-bold text-amber-700 dark:text-amber-400 text-xs tracking-wide flex items-center gap-1.5">
             <n-icon :size="15" class="shrink-0">
               <AlertTriangle />
             </n-icon>
-            <span>破坏性变更风险</span>
+            <span>环境兼容与版本风险提示</span>
           </div>
-          <div class="text-[11.5px] leading-relaxed text-rose-700 dark:text-rose-300 font-medium">
-            上游 DSH 频繁存在破坏性变更，升级后未适配的第三方插件将直接瘫痪，并可能导致服务无法启动。
+          <div class="text-[11.5px] leading-relaxed text-amber-800 dark:text-amber-300">
+            上游仓库更新可能引入破坏性接口变更或未适配插件，可能导致服务启动异常。
           </div>
-          <div class="text-[11px] text-rose-600/80 dark:text-rose-400/80 leading-normal pt-0.5">
-            稳定使用请勿盲目升级。若更新后崩溃，可在 <span class="font-semibold text-rose-700 dark:text-rose-200">设置</span> 中 <span
-              class="font-semibold text-rose-700 dark:text-rose-200">重置修复</span> 回退内置版本。
+          <div
+            class="p-2 rounded-lg bg-white/70 dark:bg-black/20 border border-amber-500/20 text-[11px] text-amber-900 dark:text-amber-200 flex items-center justify-between gap-2">
+            <span>建议在确认更新前，先手动创建快照以备随时回滚。</span>
+            <n-button text type="warning" size="tiny" class="font-medium shrink-0" @click="goToSnapshots">
+              前往创建快照 →
+            </n-button>
+          </div>
+          <div class="text-[11px] text-slate-500 dark:text-slate-400 leading-normal">
+            若更新后环境异常，可随时在「快照管理」中还原历史快照，或在「设置」中通过「重置修复」回退内置版本。
           </div>
         </div>
       </div>
@@ -244,17 +254,24 @@ import {
   AlertTriangle
 } from '@vicons/tabler'
 import { useSystemStore } from '../stores/system'
+import { useAppStore } from '../stores/app'
 import { withAsyncLock } from '../utils/debounce'
 import { useIsTouchDevice } from '../utils/device'
 import type { CheckUpdateResult } from '../types/api'
 
 const systemStore = useSystemStore()
+const appStore = useAppStore()
 const message = useMessage()
 const dialog = useDialog()
 const isTouch = useIsTouchDevice()
 
 const showUpdateModal = ref(false)
 const updateInfo = ref<CheckUpdateResult | null>(null)
+
+function goToSnapshots() {
+  showUpdateModal.value = false
+  appStore.setTab('snapshots')
+}
 
 const {
   statusData,

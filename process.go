@@ -236,6 +236,11 @@ func killHarnessLocked() {
 	waitForPortFree(port)
 
 	_ = os.Remove(pidFilePath())
+
+	usageCacheMu.Lock()
+	cachedCpu = "-"
+	cachedMem = "-"
+	usageCacheMu.Unlock()
 }
 
 func KillHarness() {
@@ -368,7 +373,7 @@ func StartUsageSampler() {
 }
 
 func sampleDshUsageOnce() {
-	if state.Status() != StatusRunning || runtime.GOOS != "linux" {
+	if runtime.GOOS != "linux" {
 		usageCacheMu.Lock()
 		cachedCpu = "-"
 		cachedMem = "-"
@@ -376,16 +381,7 @@ func sampleDshUsageOnce() {
 		return
 	}
 
-	pid := GetActiveDshPid(GetConfig().GetServerPort())
-	if pid <= 0 {
-		usageCacheMu.Lock()
-		cachedCpu = "-"
-		cachedMem = "-"
-		usageCacheMu.Unlock()
-		return
-	}
-
-	cpuStr, memStr := calculateDshUsage(pid)
+	cpuStr, memStr := calculateDshUsage(os.Getpid())
 	usageCacheMu.Lock()
 	cachedCpu = cpuStr
 	cachedMem = memStr
@@ -457,24 +453,25 @@ func parseProcStat(pid int) (ppid, pgrp int, ticks uint64, ok bool) {
 	return ppid, pgrp, utime + stime, true
 }
 
-// getDshTreeStats 聚合主 PID 及其所属进程组内所有 DSH 进程的 CPU 时间与常驻内存 (KB)
+// getDshTreeStats 聚合 主PID 及其所有派生子孙进程的 CPU 时间与常驻内存 (KB)
 func getDshTreeStats(mainPid int) (totalTicks uint64, totalRssKb uint64) {
 	if mainPid <= 0 || runtime.GOOS != "linux" {
 		return 0, 0
 	}
 
-	targetPgrp := mainPid
-	if _, pg, _, ok := parseProcStat(mainPid); ok && pg > 0 {
-		targetPgrp = pg
-	}
-
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		// 无法读取 /proc 目录时降级为统计主进程单体
 		_, _, ticks, _ := parseProcStat(mainPid)
 		return ticks, readProcRssKb(mainPid)
 	}
 
+	type procItem struct {
+		ppid  int
+		ticks uint64
+		rss   uint64
+	}
+
+	procMap := make(map[int]procItem, len(entries))
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -483,22 +480,56 @@ func getDshTreeStats(mainPid int) (totalTicks uint64, totalRssKb uint64) {
 		if err != nil || pid <= 0 {
 			continue
 		}
-
-		ppid, pgrp, ticks, ok := parseProcStat(pid)
+		ppid, _, ticks, ok := parseProcStat(pid)
 		if !ok {
 			continue
 		}
+		procMap[pid] = procItem{
+			ppid:  ppid,
+			ticks: ticks,
+			rss:   readProcRssKb(pid),
+		}
+	}
 
-		if pid == mainPid || (targetPgrp > 0 && pgrp == targetPgrp) || ppid == mainPid {
-			totalTicks += ticks
-			totalRssKb += readProcRssKb(pid)
+	isFamily := make(map[int]bool, len(procMap))
+	isFamily[mainPid] = true
+
+	var checkFamily func(pid int, visited map[int]bool) bool
+	checkFamily = func(pid int, visited map[int]bool) bool {
+		if pid <= 0 {
+			return false
+		}
+		if res, exists := isFamily[pid]; exists {
+			return res
+		}
+		if visited[pid] {
+			return false
+		}
+		visited[pid] = true
+
+		item, exists := procMap[pid]
+		if !exists {
+			return false
+		}
+		if checkFamily(item.ppid, visited) {
+			isFamily[pid] = true
+			return true
+		}
+		isFamily[pid] = false
+		return false
+	}
+
+	for pid, item := range procMap {
+		if checkFamily(pid, make(map[int]bool)) {
+			totalTicks += item.ticks
+			totalRssKb += item.rss
 		}
 	}
 
 	return totalTicks, totalRssKb
 }
 
-// calculateDshUsage 计算 DSH 服务及其子进程树的整机 CPU 与物理内存占用
+// calculateDshUsage 计算目标进程树的 CPU 与常驻内存占用
 func calculateDshUsage(pid int) (string, string) {
 	if pid <= 0 || runtime.GOOS != "linux" {
 		return "-", "-"
@@ -552,4 +583,3 @@ func calculateDshUsage(pid int) (string, string) {
 	}
 	return fmt.Sprintf("%.1f%%", pct), memStr
 }
-

@@ -167,8 +167,8 @@ export function viteDevMock(): Plugin {
           build_time: config.build_time,
           app_url: `/app/deepseek-harness/`,
           pid,
-          cpu: status === 'running' ? getMockCpu() : '-',
-          memory: status === 'running' ? getMockMemory() : '-',
+          cpu: status === 'running' ? getMockCpu() : (status === 'building' ? getMockBuildCpu() : '0.0%'),
+          memory: status === 'running' ? getMockMemory() : (status === 'building' ? getMockBuildMemory() : '18.5 MB'),
           last_message: lastMessage
         }
       }
@@ -179,6 +179,14 @@ export function viteDevMock(): Plugin {
 
       function getMockMemory(): string {
         return (240 + Math.floor(Math.random() * 12)) + ' MB'
+      }
+
+      function getMockBuildCpu(): string {
+        return (35.0 + Math.random() * 45.0).toFixed(1) + '%'
+      }
+
+      function getMockBuildMemory(): string {
+        return (1.1 + Math.random() * 0.4).toFixed(1) + ' GB'
       }
 
       function formatUptime(seconds: number): string {
@@ -214,10 +222,14 @@ export function viteDevMock(): Plugin {
       setInterval(() => {
         if (status === 'running') {
           broadcast('usage', { cpu: getMockCpu(), memory: getMockMemory() })
+        } else if (status === 'building') {
+          broadcast('usage', { cpu: getMockBuildCpu(), memory: getMockBuildMemory() })
         } else {
-          broadcast('usage', { cpu: '-', memory: '-' })
+          broadcast('usage', { cpu: '0.0%', memory: '18.5 MB' })
         }
       }, 3000)
+
+      let mockSnapshotTask: any = null
 
       function getMockSnapshotPayload() {
         const totalSize = mockSnapshots.reduce((acc, cur) => acc + (cur.size_bytes || 0), 0)
@@ -225,7 +237,8 @@ export function viteDevMock(): Plugin {
           items: mockSnapshots,
           total_size_bytes: totalSize,
           disk_free_bytes: 48 * 1024 * 1024 * 1024,
-          disk_total_bytes: 128 * 1024 * 1024 * 1024
+          disk_total_bytes: 128 * 1024 * 1024 * 1024,
+          current_task: mockSnapshotTask || { active: false }
         }
       }
 
@@ -235,14 +248,17 @@ export function viteDevMock(): Plugin {
         ws.send(JSON.stringify({
           type: 'usage',
           data: {
-            cpu: status === 'running' ? getMockCpu() : '-',
-            memory: status === 'running' ? getMockMemory() : '-'
+            cpu: status === 'running' ? getMockCpu() : (status === 'building' ? getMockBuildCpu() : '0.0%'),
+            memory: status === 'running' ? getMockMemory() : (status === 'building' ? getMockBuildMemory() : '18.5 MB')
           },
           timestamp: Date.now()
         }))
         ws.send(JSON.stringify({ type: 'workspace', data: { items: workspaces, archivedSessionIds: [] }, timestamp: Date.now() }))
         ws.send(JSON.stringify({ type: 'plugin', data: { running: activePluginTask !== null }, timestamp: Date.now() }))
         ws.send(JSON.stringify({ type: 'snapshot', data: getMockSnapshotPayload(), timestamp: Date.now() }))
+        if (mockSnapshotTask && mockSnapshotTask.active) {
+          ws.send(JSON.stringify({ type: 'snapshot_progress', data: mockSnapshotTask, timestamp: Date.now() }))
+        }
 
         ws.on('message', (msg) => {
           try {
@@ -637,11 +653,16 @@ export function viteDevMock(): Plugin {
 
         if (path.endsWith('/api/snapshots') && req.method === 'POST') {
           const body = await readJsonBody(req)
+          const targetName = (body.name || '').trim()
+          if (mockSnapshots.some((s) => (s.name || '').toLowerCase() === targetName.toLowerCase())) {
+            return sendJson(res, 400, `已存在同名快照「${targetName}」，请更换名称`, null)
+          }
+
           const oldStatus = status
           status = 'snapshotting'
-          lastMessage = '正在安全暂停服务准备创建快照...'
+          lastMessage = '停止服务准备创建快照...'
           broadcast('status', getStatusPayload())
-          appendLog('[INFO] 正在安全暂停服务，确保数据彻底落盘以创建纯净冷备快照...')
+          appendLog('[INFO] 停止运行服务，刷新持久化数据落盘...')
 
           const newSnap = {
             id: `snap_${Date.now()}_mock`,
@@ -656,13 +677,51 @@ export function viteDevMock(): Plugin {
           }
           mockSnapshots.unshift(newSnap)
 
+          mockSnapshotTask = {
+            active: true,
+            action: 'create',
+            percent: 0,
+            stage: '正在准备打包快照数据',
+            message: '校验环境与数据源'
+          }
+          broadcast('snapshot_progress', mockSnapshotTask)
+
+          let p = 0
+          const pTimer = setInterval(() => {
+            p += 20
+            if (p >= 100) {
+              clearInterval(pTimer)
+              mockSnapshotTask = {
+                active: true,
+                action: 'create',
+                percent: 100,
+                stage: '快照打包完成',
+                message: '总计 1.5 GB'
+              }
+              broadcast('snapshot_progress', mockSnapshotTask)
+              setTimeout(() => {
+                mockSnapshotTask = null
+                broadcast('snapshot_progress', { active: false })
+              }, 1200)
+            } else {
+              mockSnapshotTask = {
+                active: true,
+                action: 'create',
+                percent: p,
+                stage: '正在打包压缩数据',
+                message: `${((1.5 * p) / 100).toFixed(1)} GB / 1.5 GB`
+              }
+              broadcast('snapshot_progress', mockSnapshotTask)
+            }
+          }, 400)
+
           setTimeout(() => {
             status = oldStatus
             lastMessage = ''
             appendLog(`[INFO] 快照 [${newSnap.name}] 创建成功`)
             broadcast('status', getStatusPayload())
             broadcast('snapshot', getMockSnapshotPayload())
-          }, 1500)
+          }, 2400)
 
           return sendJson(res, 0, '快照创建成功', newSnap)
         }
@@ -670,17 +729,49 @@ export function viteDevMock(): Plugin {
         if (path.includes('/api/snapshots/') && path.endsWith('/restore') && req.method === 'POST') {
           const oldStatus = status
           status = 'snapshotting'
-          lastMessage = '正在停止服务准备还原快照...'
+          lastMessage = '停止服务准备还原快照...'
           broadcast('status', getStatusPayload())
-          appendLog('[INFO] 正在安全停止服务并干净还原快照...')
+          appendLog('[INFO] 停止服务进程，执行快照数据还原...')
+
+          mockSnapshotTask = {
+            active: true,
+            action: 'restore',
+            percent: 20,
+            stage: '正在停止服务并隔离现有数据',
+            message: '准备解压运行环境'
+          }
+          broadcast('snapshot_progress', mockSnapshotTask)
 
           setTimeout(() => {
+            mockSnapshotTask = {
+              active: true,
+              action: 'restore',
+              percent: 60,
+              stage: '正在解压还原快照数据',
+              message: '数据大小 1.5 GB'
+            }
+            broadcast('snapshot_progress', mockSnapshotTask)
+          }, 800)
+
+          setTimeout(() => {
+            mockSnapshotTask = {
+              active: true,
+              action: 'restore',
+              percent: 100,
+              stage: '快照还原完成',
+              message: '服务已重新拉起运行'
+            }
+            broadcast('snapshot_progress', mockSnapshotTask)
             status = 'running'
             lastMessage = ''
             appendLog('[INFO] 快照数据恢复完成，服务已重新拉起')
             broadcast('status', getStatusPayload())
             broadcast('snapshot', getMockSnapshotPayload())
-          }, 2000)
+            setTimeout(() => {
+              mockSnapshotTask = null
+              broadcast('snapshot_progress', { active: false })
+            }, 1200)
+          }, 1800)
 
           return sendJson(res, 0, '快照已成功还原，服务正在重新拉起', null)
         }

@@ -225,8 +225,8 @@ export const useSystemStore = defineStore('system', () => {
     }
   }
 
-  const dshCpu = computed(() => (isRunning.value ? (statusData.value.cpu || '0.0%') : '-'))
-  const dshMemory = computed(() => (isRunning.value ? (statusData.value.memory || '-') : '-'))
+  const dshCpu = computed(() => statusData.value.cpu || '-')
+  const dshMemory = computed(() => statusData.value.memory || '-')
 
   function updateUsage(cpu?: string, memory?: string) {
     if (cpu !== undefined) statusData.value.cpu = cpu

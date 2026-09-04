@@ -189,6 +189,17 @@ export interface SnapshotMeta {
 }
 
 /**
+ * 快照进行中任务进度状态
+ */
+export interface SnapshotProgressTask {
+  active?: boolean
+  action: string
+  percent: number
+  stage?: string
+  message?: string
+}
+
+/**
  * 快照列表与存储汇总
  */
 export interface SnapshotSummary {
@@ -196,6 +207,7 @@ export interface SnapshotSummary {
   total_size_bytes: number
   disk_free_bytes: number
   disk_total_bytes: number
+  current_task?: SnapshotProgressTask
 }
 
 /**

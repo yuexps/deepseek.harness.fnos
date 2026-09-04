@@ -237,6 +237,9 @@ func handleWS(c *gin.Context) {
 	if snapSummary, err := ListSnapshots(); err == nil {
 		sendMsg("snapshot", snapSummary)
 	}
+	if currentProgress := GetCurrentSnapshotProgress(); currentProgress.Active {
+		sendMsg("snapshot_progress", currentProgress)
+	}
 
 	// 事件驱动：状态与日志变更即时推送
 	stateCh, unsubscribeState := state.SubscribeState(16)
@@ -249,6 +252,8 @@ func handleWS(c *gin.Context) {
 	defer unsubscribePlugin()
 	snapCh, unsubscribeSnap := SubscribeSnapshot(16)
 	defer unsubscribeSnap()
+	snapProgressCh, unsubscribeSnapProgress := SubscribeSnapshotProgress(32)
+	defer unsubscribeSnapProgress()
 
 	// 读循环：消费客户端 ping 等应用层控制帧并检测断开
 	done := make(chan struct{})
@@ -288,6 +293,8 @@ func handleWS(c *gin.Context) {
 			if snapSummary, err := ListSnapshots(); err == nil {
 				sendMsg("snapshot", snapSummary)
 			}
+		case p := <-snapProgressCh:
+			sendMsg("snapshot_progress", p)
 		case <-usageTicker.C:
 			c, m := GetCachedDshUsage()
 			sendMsg("usage", gin.H{"cpu": c, "memory": m})

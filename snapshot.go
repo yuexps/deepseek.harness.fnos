@@ -25,7 +25,71 @@ var (
 	validIDRegex   = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	snapshotSubs   = make(map[chan struct{}]struct{})
 	snapshotSubsMu sync.Mutex
+
+	snapProgressSubs   = make(map[chan SnapshotProgress]struct{})
+	snapProgressSubsMu sync.Mutex
+
+	currentSnapshotProgress SnapshotProgress
+	currentSnapshotMu       sync.RWMutex
 )
+
+// SnapshotProgress 快照进度事件与状态
+type SnapshotProgress struct {
+	Active  bool   `json:"active"`
+	Action  string `json:"action"`
+	Percent int    `json:"percent"`
+	Stage   string `json:"stage"`
+	Message string `json:"message"`
+}
+
+// GetCurrentSnapshotProgress 获取当前快照任务实时进度
+func GetCurrentSnapshotProgress() SnapshotProgress {
+	currentSnapshotMu.RLock()
+	defer currentSnapshotMu.RUnlock()
+	return currentSnapshotProgress
+}
+
+func setSnapshotProgress(p SnapshotProgress) {
+	currentSnapshotMu.Lock()
+	currentSnapshotProgress = p
+	currentSnapshotMu.Unlock()
+	broadcastSnapshotProgress(p)
+}
+
+func clearSnapshotProgress() {
+	currentSnapshotMu.Lock()
+	currentSnapshotProgress = SnapshotProgress{Active: false}
+	currentSnapshotMu.Unlock()
+	broadcastSnapshotProgress(SnapshotProgress{Active: false})
+}
+
+// SubscribeSnapshotProgress 订阅快照实际进度
+func SubscribeSnapshotProgress(buf int) (<-chan SnapshotProgress, func()) {
+	snapProgressSubsMu.Lock()
+	defer snapProgressSubsMu.Unlock()
+	ch := make(chan SnapshotProgress, buf)
+	snapProgressSubs[ch] = struct{}{}
+	return ch, func() {
+		snapProgressSubsMu.Lock()
+		delete(snapProgressSubs, ch)
+		snapProgressSubsMu.Unlock()
+	}
+}
+
+func broadcastSnapshotProgress(p SnapshotProgress) {
+	snapProgressSubsMu.Lock()
+	subs := make([]chan SnapshotProgress, 0, len(snapProgressSubs))
+	for ch := range snapProgressSubs {
+		subs = append(subs, ch)
+	}
+	snapProgressSubsMu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- p:
+		default:
+		}
+	}
+}
 
 // SubscribeSnapshot 订阅快照变更事件
 func SubscribeSnapshot(buf int) (<-chan struct{}, func()) {
@@ -285,10 +349,11 @@ type CreateSnapshotParams struct {
 
 // SnapshotSummary 快照列表与存储汇总
 type SnapshotSummary struct {
-	Items          []SnapshotMeta `json:"items"`
-	TotalSizeBytes int64          `json:"total_size_bytes"`
-	DiskFreeBytes  uint64         `json:"disk_free_bytes"`
-	DiskTotalBytes uint64         `json:"disk_total_bytes"`
+	Items          []SnapshotMeta   `json:"items"`
+	TotalSizeBytes int64            `json:"total_size_bytes"`
+	DiskFreeBytes  uint64           `json:"disk_free_bytes"`
+	DiskTotalBytes uint64           `json:"disk_total_bytes"`
+	CurrentTask    SnapshotProgress `json:"current_task"`
 }
 
 func snapshotsBaseDir() string {
@@ -303,15 +368,12 @@ func randHex(n int) string {
 
 // ListSnapshots 获取所有快照列表及统计
 func ListSnapshots() (SnapshotSummary, error) {
-	snapshotMu.Lock()
-	defer snapshotMu.Unlock()
-
 	base := snapshotsBaseDir()
 	_ = os.MkdirAll(base, 0755)
 
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return SnapshotSummary{Items: []SnapshotMeta{}}, err
+		return SnapshotSummary{Items: []SnapshotMeta{}, CurrentTask: GetCurrentSnapshotProgress()}, err
 	}
 
 	var items []SnapshotMeta
@@ -348,6 +410,7 @@ func ListSnapshots() (SnapshotSummary, error) {
 		TotalSizeBytes: totalSize,
 		DiskFreeBytes:  disk.FreeBytes,
 		DiskTotalBytes: disk.TotalBytes,
+		CurrentTask:    GetCurrentSnapshotProgress(),
 	}, nil
 }
 
@@ -364,9 +427,11 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 		return nil, fmt.Errorf("服务正在启动中，请等待启动完成后再创建快照")
 	}
 
-	if strings.TrimSpace(params.Name) == "" {
-		params.Name = "手动快照_" + time.Now().Format("0102_1504")
+	targetName := strings.TrimSpace(params.Name)
+	if targetName == "" {
+		targetName = "手动快照_" + time.Now().Format("0102_1504")
 	}
+	params.Name = targetName
 
 	if err := CheckResourceForSnapshot(); err != nil {
 		return nil, err
@@ -375,11 +440,42 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 	snapshotMu.Lock()
 	defer snapshotMu.Unlock()
 
-	// 记录服务运行状态，确保冷备数据 100% 纯净与落盘
+	// 检查已有快照名称，拦截重名
+	base := snapshotsBaseDir()
+	if entries, err := os.ReadDir(base); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() || !validIDRegex.MatchString(entry.Name()) {
+				continue
+			}
+			metaFile := filepath.Join(base, entry.Name(), "meta.json")
+			if data, err := os.ReadFile(metaFile); err == nil {
+				var meta SnapshotMeta
+				if err := json.Unmarshal(data, &meta); err == nil {
+					if strings.EqualFold(strings.TrimSpace(meta.Name), targetName) {
+						return nil, fmt.Errorf("已存在同名快照「%s」，请更换名称", targetName)
+					}
+				}
+			}
+		}
+	}
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "create",
+		Percent: 0,
+		Stage:   "正在准备快照环境",
+		Message: "停止服务进程与校验系统环境",
+	})
+	defer func() {
+		time.Sleep(1200 * time.Millisecond)
+		clearSnapshotProgress()
+	}()
+
+	// 记录服务运行状态
 	wasRunning := (state.Status() == StatusRunning)
 	if wasRunning {
-		LogInfo("正在安全暂停服务，确保数据彻底落盘以创建纯净冷备快照...")
-		state.SetStatus(StatusSnapshotting, "正在安全暂停服务准备创建快照...")
+		LogInfo("停止运行中的服务主进程，刷新持久化数据落盘...")
+		state.SetStatus(StatusSnapshotting, "停止服务准备创建快照...")
 		KillHarness()
 		time.Sleep(1 * time.Second)
 	}
@@ -421,7 +517,8 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 		CompressionLevel: level,
 	}
 
-	LogInfo("开始全量打包快照 [%s] (压缩级别: Lv%d)...", id, level)
+	LogInfo("开始全量打包快照 [%s]: 名称=\"%s\", 压缩级别=Lv%d, 插件数=%d", id, meta.Name, level, pluginCount)
+	snapStart := time.Now()
 	if err := archiveSnapshotData(tarPath, level); err != nil {
 		_ = os.RemoveAll(snapDir)
 		if wasRunning {
@@ -437,23 +534,79 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 	}
 	metaBytes, _ := json.MarshalIndent(meta, "", "  ")
 	_ = os.WriteFile(filepath.Join(snapDir, "meta.json"), metaBytes, 0644)
+	LogInfo("生成快照元数据描述文件 (meta.json)")
 
 	// 打包完成后，若之前为运行中则自动拉起恢复服务
 	if wasRunning {
-		LogInfo("快照打包完成，正在自动拉起恢复服务...")
+		LogInfo("快照打包归档完成 (耗时: %s)，正在自动拉起恢复服务...", time.Since(snapStart).Round(time.Millisecond))
 		state.SetStatus(StatusStopped, "")
 		if err := Start(); err != nil {
 			LogWarning("快照创建后服务自启失败: %s", err)
 		}
 	}
 
-	LogInfo("快照 [%s] 创建成功 (大小: %s)", id, formatBytes(uint64(meta.SizeBytes)))
+	LogInfo("快照 [%s] 创建成功 (归档文件大小: %s, 总耗时: %s)", id, formatBytes(uint64(meta.SizeBytes)), time.Since(snapStart).Round(time.Millisecond))
 	notifySnapshot()
 	return &meta, nil
 }
 
-// archiveSnapshotData 将 src, home, dsh-data, config.json 全量打包至 tar.gz
+type countWriter struct {
+	w io.Writer
+	n *int64
+}
+
+func (cw *countWriter) Write(p []byte) (int, error) {
+	n, err := cw.w.Write(p)
+	if n > 0 && cw.n != nil {
+		*cw.n += int64(n)
+	}
+	return n, err
+}
+
+type progressWriter struct {
+	w          io.Writer
+	onProgress func(int64)
+}
+
+func (pw *progressWriter) Write(p []byte) (int, error) {
+	n, err := pw.w.Write(p)
+	if n > 0 && pw.onProgress != nil {
+		pw.onProgress(int64(n))
+	}
+	return n, err
+}
+
+// archiveSnapshotData 将 src, home, dsh-data, config.json 全量打包至 tar.gz 并广播实际进度
 func archiveSnapshotData(tarPath string, level int) error {
+	targets := []string{"config.json", "src", "home", "dsh-data"}
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "create",
+		Percent: 0,
+		Stage:   "正在统计数据总量",
+		Message: "扫描源文件元信息",
+	})
+
+	LogInfo("正在扫描待归档数据源: [%s]", strings.Join(targets, ", "))
+	scanStart := time.Now()
+	var totalBytes int64
+	var fileCount int
+	for _, rel := range targets {
+		p := filepath.Join(globalPkgVar, rel)
+		_ = filepath.Walk(p, func(_ string, fi os.FileInfo, err error) error {
+			if err == nil && fi.Mode().IsRegular() {
+				totalBytes += fi.Size()
+				fileCount++
+			}
+			return nil
+		})
+	}
+	if totalBytes <= 0 {
+		totalBytes = 1
+	}
+	LogInfo("数据源预检完毕: 共计 %d 个文件，原始体积 %s (耗时: %s)", fileCount, formatBytes(uint64(totalBytes)), time.Since(scanStart).Round(time.Millisecond))
+
 	f, err := os.Create(tarPath)
 	if err != nil {
 		return err
@@ -463,7 +616,10 @@ func archiveSnapshotData(tarPath string, level int) error {
 	if level < 1 || level > 9 {
 		level = gzip.BestSpeed
 	}
-	gw, err := gzip.NewWriterLevel(f, level)
+
+	var compressedBytes int64
+	cw := &countWriter{w: f, n: &compressedBytes}
+	gw, err := gzip.NewWriterLevel(cw, level)
 	if err != nil {
 		return err
 	}
@@ -472,8 +628,39 @@ func archiveSnapshotData(tarPath string, level int) error {
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
 
-	targets := []string{"config.json", "src", "home", "dsh-data"}
+	var processedBytes int64
+	var lastReportPct = -1
+	var lastReportTime time.Time
+	var lastMilestonePct = 0
 
+	reportProgress := func(written int64) {
+		processedBytes += written
+		pct := int(float64(processedBytes) * 100 / float64(totalBytes))
+		if pct > 99 {
+			pct = 99
+		}
+		now := time.Now()
+		if pct != lastReportPct && now.Sub(lastReportTime) >= 120*time.Millisecond {
+			lastReportPct = pct
+			lastReportTime = now
+			setSnapshotProgress(SnapshotProgress{
+				Active:  true,
+				Action:  "create",
+				Percent: pct,
+				Stage:   "正在打包压缩",
+				Message: fmt.Sprintf("%s / %s · 已压缩输出 %s", formatBytes(uint64(processedBytes)), formatBytes(uint64(totalBytes)), formatBytes(uint64(compressedBytes))),
+			})
+		}
+		// 关键进度里程碑输出日志
+		if pct >= lastMilestonePct+25 && pct < 100 {
+			lastMilestonePct = (pct / 25) * 25
+			LogInfo("快照打包压缩中: 进度 %d%% (已读取 %s / %s，已写入压缩包 %s)", pct, formatBytes(uint64(processedBytes)), formatBytes(uint64(totalBytes)), formatBytes(uint64(compressedBytes)))
+		}
+	}
+
+	pw := &progressWriter{w: tw, onProgress: reportProgress}
+
+	packStart := time.Now()
 	for _, rel := range targets {
 		srcPath := filepath.Join(globalPkgVar, rel)
 		fi, err := os.Lstat(srcPath)
@@ -484,8 +671,10 @@ func archiveSnapshotData(tarPath string, level int) error {
 			return err
 		}
 
+		LogInfo("正在压缩归档模块 [%s]...", rel)
+
 		if !fi.IsDir() {
-			if err := addFileToTar(tw, globalPkgVar, rel, fi); err != nil {
+			if err := addFileToTar(tw, pw, globalPkgVar, rel, fi); err != nil {
 				return err
 			}
 			continue
@@ -495,25 +684,45 @@ func archiveSnapshotData(tarPath string, level int) error {
 			if walkErr != nil {
 				return walkErr
 			}
-
 			relPath, err := filepath.Rel(globalPkgVar, path)
 			if err != nil {
 				return err
 			}
 			relPath = filepath.ToSlash(relPath)
-
-			return addFileToTar(tw, globalPkgVar, relPath, info)
+			return addFileToTar(tw, pw, globalPkgVar, relPath, info)
 		})
-
 		if err != nil {
 			return err
 		}
 	}
 
+	// 显式完成压缩落盘，获取最终压缩文件大小
+	_ = tw.Close()
+	_ = gw.Close()
+
+	ratio := 100.0
+	if totalBytes > 0 {
+		ratio = float64(compressedBytes) * 100 / float64(totalBytes)
+	}
+	LogInfo("快照数据流压缩落盘完成: 原始 %s → 压缩后 %s (体积缩减至 %.1f%%，压缩耗时: %s)",
+		formatBytes(uint64(totalBytes)),
+		formatBytes(uint64(compressedBytes)),
+		ratio,
+		time.Since(packStart).Round(time.Millisecond),
+	)
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "create",
+		Percent: 100,
+		Stage:   "快照压缩完成",
+		Message: fmt.Sprintf("原始 %s → 压缩后 %s", formatBytes(uint64(totalBytes)), formatBytes(uint64(compressedBytes))),
+	})
+
 	return nil
 }
 
-func addFileToTar(tw *tar.Writer, baseDir, relPath string, info os.FileInfo) error {
+func addFileToTar(tw *tar.Writer, pw io.Writer, baseDir, relPath string, info os.FileInfo) error {
 	fullPath := filepath.Join(baseDir, filepath.FromSlash(relPath))
 
 	var linkTarget string
@@ -549,7 +758,7 @@ func addFileToTar(tw *tar.Writer, baseDir, relPath string, info os.FileInfo) err
 	}
 	defer file.Close()
 
-	_, err = io.Copy(tw, file)
+	_, err = io.Copy(pw, file)
 	return err
 }
 
@@ -586,7 +795,7 @@ func verifySnapshotArchive(tarPath string) error {
 	return nil
 }
 
-// RestoreSnapshot 一键干净还原快照（原子重命名容灾）
+// RestoreSnapshot 还原指定快照
 func RestoreSnapshot(id string) error {
 	cur := state.Status()
 	if cur == StatusBuilding {
@@ -617,20 +826,38 @@ func RestoreSnapshot(id string) error {
 		return fmt.Errorf("快照压缩包缺失: %w", err)
 	}
 
+	LogInfo("开始执行快照还原 [%s]: 名称=\"%s\", 版本=%s, 压缩包大小=%s", id, meta.Name, meta.VersionTag, formatBytes(uint64(meta.SizeBytes)))
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 5,
+		Stage:   "正在校验快照数据完整性",
+		Message: fmt.Sprintf("快照: %s", meta.Name),
+	})
+	defer func() {
+		time.Sleep(1200 * time.Millisecond)
+		clearSnapshotProgress()
+	}()
+
 	if err := CheckResourceForRestore(meta.SizeBytes); err != nil {
 		return err
 	}
 
+	LogInfo("正在校验快照压缩包数据完整性...")
+	verifyStart := time.Now()
 	if err := verifySnapshotArchive(tarPath); err != nil {
+		LogError("快照压缩包校验失败: %s", err)
 		return fmt.Errorf("快照校验失败，取消还原: %w", err)
 	}
+	LogInfo("快照包校验通过 (校验耗时: %s)", time.Since(verifyStart).Round(time.Millisecond))
 
 	snapshotMu.Lock()
 	defer snapshotMu.Unlock()
 
-	LogInfo("开始还原快照 [%s] (%s)...", id, meta.Name)
-
-	state.SetStatus(StatusSnapshotting, "正在停止服务准备还原快照...")
+	restoreStart := time.Now()
+	state.SetStatus(StatusSnapshotting, "停止服务准备还原快照...")
+	LogInfo("停止当前服务主进程...")
 	KillHarness()
 	time.Sleep(1 * time.Second)
 
@@ -640,6 +867,15 @@ func RestoreSnapshot(id string) error {
 	targetDirs := []string{"config.json", "src", "home", "dsh-data"}
 	var movedDirs []string
 
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 20,
+		Stage:   "正在停止服务并隔离现有数据",
+		Message: "准备解压运行环境",
+	})
+
+	LogInfo("转移当前工作区数据至临时隔离目录 [%s]...", filepath.Base(trashDir))
 	for _, d := range targetDirs {
 		src := filepath.Join(globalPkgVar, d)
 		dst := filepath.Join(trashDir, d)
@@ -651,10 +887,21 @@ func RestoreSnapshot(id string) error {
 			}
 		}
 	}
+	LogInfo("现有工作区数据隔离完毕 (共 %d 个模块: [%s])", len(movedDirs), strings.Join(movedDirs, ", "))
 
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 45,
+		Stage:   "正在解压还原快照数据",
+		Message: fmt.Sprintf("数据大小 %s", formatBytes(uint64(meta.SizeBytes))),
+	})
+
+	LogInfo("开始解压快照归档包至运行环境...")
+	extractStart := time.Now()
 	extractErr := extractTarGz(tarPath, globalPkgVar)
 	if extractErr != nil {
-		LogWarning("快照解压失败，立即执行回滚自愈: %s", extractErr)
+		LogError("快照解压失败，执行数据回滚: %s", extractErr)
 		for _, d := range movedDirs {
 			target := filepath.Join(globalPkgVar, d)
 			_ = safeRemoveAll(target)
@@ -662,21 +909,48 @@ func RestoreSnapshot(id string) error {
 		}
 		_ = safeRemoveAll(trashDir)
 		_ = Start()
-		return fmt.Errorf("快照解压失败，已自动回滚当前状态: %w", extractErr)
+		return fmt.Errorf("快照解压失败，已回滚历史数据: %w", extractErr)
 	}
+	LogInfo("快照数据包解压完成 (解压耗时: %s)", time.Since(extractStart).Round(time.Millisecond))
 
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 80,
+		Stage:   "正在重新初始化应用配置与环境",
+		Message: "载入环境参数",
+	})
+
+	LogInfo("正在清理旧数据临时隔离归档...")
 	go func(trash string) {
 		_ = safeRemoveAll(trash)
 	}(trashDir)
 
+	LogInfo("正在重新初始化应用环境与加载配置...")
 	InitConfig(globalPkgVar)
 	InitAppEnv(globalPkgVar)
 
-	LogInfo("快照 [%s] 数据恢复完成，正在拉起服务", id)
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 95,
+		Stage:   "正在拉起恢复服务进程",
+		Message: "等待服务就绪",
+	})
+
+	LogInfo("快照 [%s] 数据恢复全部就绪 (还原总耗时: %s)，正在重新拉起服务...", id, time.Since(restoreStart).Round(time.Millisecond))
 	state.SetStatus(StatusStopped, "")
 	if err := Start(); err != nil {
 		LogWarning("还原后服务自启失败: %s", err)
 	}
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "restore",
+		Percent: 100,
+		Stage:   "快照还原完成",
+		Message: "服务已重新拉起运行",
+	})
 
 	notifySnapshot()
 	return nil
