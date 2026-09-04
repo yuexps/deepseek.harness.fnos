@@ -254,6 +254,8 @@ func handleWS(c *gin.Context) {
 	defer unsubscribeSnap()
 	snapProgressCh, unsubscribeSnapProgress := SubscribeSnapshotProgress(32)
 	defer unsubscribeSnapProgress()
+	usageCh, unsubscribeUsage := SubscribeUsage(16)
+	defer unsubscribeUsage()
 
 	// 读循环：消费客户端 ping 等应用层控制帧并检测断开
 	done := make(chan struct{})
@@ -274,8 +276,6 @@ func handleWS(c *gin.Context) {
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
-	usageTicker := time.NewTicker(3 * time.Second)
-	defer usageTicker.Stop()
 
 	for {
 		select {
@@ -295,9 +295,8 @@ func handleWS(c *gin.Context) {
 			}
 		case p := <-snapProgressCh:
 			sendMsg("snapshot_progress", p)
-		case <-usageTicker.C:
-			c, m := GetCachedDshUsage()
-			sendMsg("usage", gin.H{"cpu": c, "memory": m})
+		case u := <-usageCh:
+			sendMsg("usage", u)
 		case <-heartbeat.C:
 			writeMu.Lock()
 			_ = conn.WriteMessage(websocket.PingMessage, nil)

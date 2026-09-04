@@ -338,15 +338,30 @@ type procSample struct {
 	total uint64
 }
 
+// UsageStats CPU 与内存资源指标
+type UsageStats struct {
+	Cpu    string `json:"cpu"`
+	Memory string `json:"memory"`
+}
+
 var (
 	usageCacheMu sync.RWMutex
 	cachedCpu    = "-"
 	cachedMem    = "-"
 
+	usageSubMu  sync.Mutex
+	usageSubs   = make(map[chan UsageStats]struct{})
+	wakeUsageCh = make(chan struct{}, 1)
+
 	usageSampleMu sync.Mutex
 	lastSample    procSample
 	lastSamplePid int
 	lastSampleAt  time.Time
+
+	lastSentMu  sync.Mutex
+	lastSentCpu string
+	lastSentMem string
+	lastSentAt  time.Time
 )
 
 // GetCachedDshUsage 获取后台单例采集的 DSH CPU 与内存指标
@@ -356,13 +371,87 @@ func GetCachedDshUsage() (string, string) {
 	return cachedCpu, cachedMem
 }
 
-// StartUsageSampler 启动系统指标单例采集协程
+// SubscribeUsage 订阅 CPU/内存资源指标推送，返回的函数用于取消订阅
+func SubscribeUsage(buf int) (<-chan UsageStats, func()) {
+	ch := make(chan UsageStats, buf)
+	usageSubMu.Lock()
+	wasEmpty := len(usageSubs) == 0
+	usageSubs[ch] = struct{}{}
+	usageSubMu.Unlock()
+
+	// 首个订阅者接入时立即唤醒采样，避免等待待机周期
+	if wasEmpty {
+		select {
+		case wakeUsageCh <- struct{}{}:
+		default:
+		}
+	}
+
+	return ch, func() {
+		usageSubMu.Lock()
+		delete(usageSubs, ch)
+		usageSubMu.Unlock()
+	}
+}
+
+func hasUsageSubscribers() bool {
+	usageSubMu.Lock()
+	defer usageSubMu.Unlock()
+	return len(usageSubs) > 0
+}
+
+func broadcastUsageIfChanged(stats UsageStats) {
+	lastSentMu.Lock()
+	now := time.Now()
+	changed := stats.Cpu != lastSentCpu || stats.Memory != lastSentMem
+	heartbeatDue := now.Sub(lastSentAt) >= 5*time.Second
+
+	// 数值未变且未到保底心跳周期时跳过推送
+	if !changed && !heartbeatDue {
+		lastSentMu.Unlock()
+		return
+	}
+
+	lastSentCpu = stats.Cpu
+	lastSentMem = stats.Memory
+	lastSentAt = now
+	lastSentMu.Unlock()
+
+	usageSubMu.Lock()
+	defer usageSubMu.Unlock()
+	for ch := range usageSubs {
+		select {
+		case ch <- stats:
+		default:
+		}
+	}
+}
+
+// StartUsageSampler 启动系统指标智能单例采集协程
 func StartUsageSampler() {
 	go func() {
-		ticker := time.NewTicker(3 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			sampleDshUsageOnce()
+		// 启动即采样一次建立基准 ticks
+		sampleDshUsageOnce()
+
+		for {
+			interval := 5 * time.Second
+			if hasUsageSubscribers() {
+				interval = 1 * time.Second
+			}
+
+			timer := time.NewTimer(interval)
+			select {
+			case <-timer.C:
+				sampleDshUsageOnce()
+			case <-wakeUsageCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				sampleDshUsageOnce()
+			}
 		}
 	}()
 }
@@ -373,6 +462,7 @@ func sampleDshUsageOnce() {
 		cachedCpu = "-"
 		cachedMem = "-"
 		usageCacheMu.Unlock()
+		broadcastUsageIfChanged(UsageStats{Cpu: "-", Memory: "-"})
 		return
 	}
 
@@ -381,6 +471,8 @@ func sampleDshUsageOnce() {
 	cachedCpu = cpuStr
 	cachedMem = memStr
 	usageCacheMu.Unlock()
+
+	broadcastUsageIfChanged(UsageStats{Cpu: cpuStr, Memory: memStr})
 }
 
 // readProcRssKb 读取单进程常驻物理内存 (KB)

@@ -227,7 +227,7 @@ export function viteDevMock(): Plugin {
         } else {
           broadcast('usage', { cpu: '0.0%', memory: '18.5 MB' })
         }
-      }, 3000)
+      }, 1000)
 
       let mockSnapshotTask: any = null
 
