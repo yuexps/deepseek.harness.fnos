@@ -186,10 +186,25 @@
 
               <!-- 飞牛官方 TRIM CLI 技能开关 -->
               <n-gi span="2">
-                <div
-                  class="flex items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80">
-                  <span class="text-sm font-medium text-slate-800 dark:text-slate-100">飞牛官方 TRIM CLI 技能</span>
-                  <n-switch v-model:value="config.enable_builtin_skill" size="medium" class="shrink-0" />
+                <div class="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100">飞牛官方 TRIM CLI 技能</span>
+                      <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
+                        <template #trigger>
+                          <n-icon size="14"
+                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
+                            <Help />
+                          </n-icon>
+                        </template>
+                        自动向 DSH 注入飞牛官方命令行工具，提供 NAS 文件、存储、相册与系统状态管理能力
+                      </n-tooltip>
+                    </div>
+                    <n-switch v-model:value="config.enable_builtin_skill" size="medium" class="shrink-0" />
+                  </div>
+                  <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+                    启用后自动同步内置技能到 DSH 数据目录，支持通过自然语言操控 NAS。
+                  </div>
                 </div>
               </n-gi>
             </n-grid>

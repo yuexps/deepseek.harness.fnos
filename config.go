@@ -41,6 +41,20 @@ func (c Config) IsProxyDshRuntimeEnabled() bool {
 	return *c.ProxyDshRuntime
 }
 
+func (c Config) GetServerPort() int {
+	if c.ServerPort <= 0 {
+		return 2298
+	}
+	return c.ServerPort
+}
+
+func (c Config) GetProxyPort() int {
+	if c.ProxyPort <= 0 {
+		return 2299
+	}
+	return c.ProxyPort
+}
+
 func (c Config) GetNpmRegistry() string {
 	if trimmed := strings.TrimSpace(c.NpmRegistry); trimmed != "" {
 		return trimmed

@@ -46,6 +46,10 @@ func InitRoutes(r *gin.Engine) {
 		api.POST("/plugins/run", handlePluginRun)
 		api.POST("/plugins/toggle", handlePluginToggle)
 		api.POST("/plugins/cancel", handlePluginCancel)
+		api.GET("/snapshots", handleListSnapshots)
+		api.POST("/snapshots", handleCreateSnapshot)
+		api.POST("/snapshots/:id/restore", handleRestoreSnapshot)
+		api.DELETE("/snapshots/:id", handleDeleteSnapshot)
 	}
 
 	sub, err := fs.Sub(WebFS, "frontend/dist")
@@ -120,10 +124,7 @@ func statusPayload() gin.H {
 	status, uptime, lastMsg, commit, version, buildTime, targetCommit, startedAt := state.Snapshot()
 	cfg := GetConfig()
 
-	port := cfg.ProxyPort
-	if port <= 0 {
-		port = 2299
-	}
+	port := cfg.GetProxyPort()
 	appURL := ":" + strconv.Itoa(port) + "/"
 	if status == StatusRunning {
 		if token := GetCurrentLaunchToken(); token != "" {
@@ -131,20 +132,11 @@ func statusPayload() gin.H {
 		}
 	}
 
-	serverPort := cfg.ServerPort
-	if serverPort <= 0 {
-		serverPort = 2298
-	}
-
+	serverPort := cfg.GetServerPort()
 	var pidVal any
-	if (status == StatusRunning || status == StatusStarting) {
-		// 优先获取当前正在监听内部端口的实际活跃 PID，确保派生子进程时 PID 实时精准
-		if pids := findPidsOnPort(serverPort); len(pids) > 0 && isProcessAlive(pids[0]) {
-			pidVal = pids[0]
-		} else if data, err := os.ReadFile(pidFilePath()); err == nil {
-			if p, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && p > 0 && isProcessAlive(p) {
-				pidVal = p
-			}
+	if status == StatusRunning || status == StatusStarting {
+		if pid := GetActiveDshPid(serverPort); pid > 0 {
+			pidVal = pid
 		}
 	}
 
@@ -171,13 +163,15 @@ func statusPayload() gin.H {
 	var appVerVal any
 	var appRemoteVerVal any
 	appHasUpdate := false
-	if appVer := getAppVersion(); appVer != "" {
+	if appVer := globalAppVer; appVer != "" {
 		appVerVal = appVer
 		appHasUpdate = checkAppHasUpdate(appVer)
 		if remoteVer := getAppRemoteVersion(); remoteVer != "" {
 			appRemoteVerVal = remoteVer
 		}
 	}
+
+	cpuVal, memVal := GetCachedDshUsage()
 
 	return gin.H{
 		"name":               "DeepSeek Harness",
@@ -195,6 +189,8 @@ func statusPayload() gin.H {
 		"build_time":         buildTimeVal,
 		"app_url":            appURL,
 		"pid":                pidVal,
+		"cpu":                cpuVal,
+		"memory":             memVal,
 		"last_message":       lastMsg,
 	}
 }
@@ -233,9 +229,14 @@ func handleWS(c *gin.Context) {
 	}
 
 	// 连接即推送最新快照
-	sendMsg("status", statusPayload())
+	initStatus := statusPayload()
+	sendMsg("status", initStatus)
+	sendMsg("usage", gin.H{"cpu": initStatus["cpu"], "memory": initStatus["memory"]})
 	sendMsg("workspace", GetWorkspaces())
 	sendMsg("plugin", pluginStatusPayload())
+	if snapSummary, err := ListSnapshots(); err == nil {
+		sendMsg("snapshot", snapSummary)
+	}
 
 	// 事件驱动：状态与日志变更即时推送
 	stateCh, unsubscribeState := state.SubscribeState(16)
@@ -246,6 +247,8 @@ func handleWS(c *gin.Context) {
 	defer unsubscribeWs()
 	pluginCh, unsubscribePlugin := SubscribePlugin(16)
 	defer unsubscribePlugin()
+	snapCh, unsubscribeSnap := SubscribeSnapshot(16)
+	defer unsubscribeSnap()
 
 	// 读循环：消费客户端 ping 等应用层控制帧并检测断开
 	done := make(chan struct{})
@@ -266,6 +269,8 @@ func handleWS(c *gin.Context) {
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
+	usageTicker := time.NewTicker(3 * time.Second)
+	defer usageTicker.Stop()
 
 	for {
 		select {
@@ -279,6 +284,13 @@ func handleWS(c *gin.Context) {
 			sendMsg("workspace", GetWorkspaces())
 		case <-pluginCh:
 			sendMsg("plugin", pluginStatusPayload())
+		case <-snapCh:
+			if snapSummary, err := ListSnapshots(); err == nil {
+				sendMsg("snapshot", snapSummary)
+			}
+		case <-usageTicker.C:
+			c, m := GetCachedDshUsage()
+			sendMsg("usage", gin.H{"cpu": c, "memory": m})
 		case <-heartbeat.C:
 			writeMu.Lock()
 			_ = conn.WriteMessage(websocket.PingMessage, nil)
@@ -301,6 +313,10 @@ func handleAction(c *gin.Context) {
 	case "start", "stop", "restart":
 		if state.Status() == StatusBuilding {
 			Fail(c, http.StatusConflict, "正在构建中，请稍候再试")
+			return
+		}
+		if state.Status() == StatusSnapshotting {
+			Fail(c, http.StatusConflict, "正在快照维护中，请稍候再试")
 			return
 		}
 		if state.Status() == StatusStarting && req.Action == "start" {
@@ -326,6 +342,10 @@ func handleAction(c *gin.Context) {
 	case "upgrade", "rebuild", "repair", "reset":
 		if state.Status() == StatusBuilding {
 			Fail(c, http.StatusConflict, "正在构建中，请稍候再试")
+			return
+		}
+		if state.Status() == StatusSnapshotting {
+			Fail(c, http.StatusConflict, "正在快照维护中，请稍候再试")
 			return
 		}
 		switch req.Action {
@@ -466,7 +486,7 @@ func handleGetLogs(c *gin.Context) {
 	if err != nil || limit <= 0 {
 		limit = 300
 	}
-	lines, content, err := readLastNLines(logFilePath(), limit)
+	lines, content, err := readLastNLines(GetLogFilePath(), limit)
 	if err != nil {
 		if os.IsNotExist(err) {
 			OK(c, LogPayload{Lines: []string{}, Content: ""})
@@ -487,7 +507,7 @@ func handleDeleteLogs(c *gin.Context) {
 }
 
 func handleDownloadLogs(c *gin.Context) {
-	c.FileAttachment(logFilePath(), "harness.log")
+	c.FileAttachment(GetLogFilePath(), "harness.log")
 }
 
 func handleGetConfig(c *gin.Context) {
@@ -591,6 +611,43 @@ func handleSaveConfig(c *gin.Context) {
 	OKMsg(c, "应用设置保存成功", cfg)
 }
 
-func logFilePath() string {
-	return filepath.Join(globalPkgVar, "harness.log")
+func handleListSnapshots(c *gin.Context) {
+	summary, err := ListSnapshots()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "获取快照列表失败: "+err.Error())
+		return
+	}
+	OK(c, summary)
 }
+
+func handleCreateSnapshot(c *gin.Context) {
+	var params CreateSnapshotParams
+	_ = c.ShouldBindJSON(&params)
+
+	meta, err := CreateSnapshot(params)
+	if err != nil {
+		Fail(c, http.StatusBadRequest, "创建快照失败: "+err.Error())
+		return
+	}
+	OKMsg(c, "快照创建成功", meta)
+}
+
+func handleRestoreSnapshot(c *gin.Context) {
+	id := c.Param("id")
+	if err := RestoreSnapshot(id); err != nil {
+		Fail(c, http.StatusInternalServerError, "还原快照失败: "+err.Error())
+		return
+	}
+	OKMsg(c, "快照已成功还原，服务正在重新拉起", nil)
+}
+
+func handleDeleteSnapshot(c *gin.Context) {
+	id := c.Param("id")
+	if err := DeleteSnapshot(id); err != nil {
+		Fail(c, http.StatusInternalServerError, "删除快照失败: "+err.Error())
+		return
+	}
+	OKMsg(c, "快照已成功删除", nil)
+}
+
+

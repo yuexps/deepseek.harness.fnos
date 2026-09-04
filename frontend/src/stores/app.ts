@@ -42,6 +42,10 @@ export const useAppStore = defineStore('app', () => {
       pluginStore.updatePluginStatus(status)
     })
 
+    wsClient.on('usage', (data) => {
+      systemStore.updateUsage(data.cpu, data.memory)
+    })
+
     wsClient.on('log', (chunk) => {
       logStore.appendChunk(chunk)
     })

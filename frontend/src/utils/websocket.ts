@@ -1,9 +1,11 @@
-import type { WSEnvelope, StatusData, WorkspaceData, PluginStatus } from '../types/api'
+import type { WSEnvelope, StatusData, WorkspaceData, PluginStatus, SnapshotSummary } from '../types/api'
 
 export type WSEventMap = {
   status: StatusData
   workspace: WorkspaceData
   plugin: PluginStatus
+  snapshot: SnapshotSummary
+  usage: { cpu: string; memory: string }
   log: string
   pong: { server_time: number }
   connectionChange: boolean

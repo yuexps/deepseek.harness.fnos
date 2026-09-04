@@ -317,18 +317,8 @@ var (
 
 func updateReverseProxyTarget() {
 	cfg := GetConfig()
-
-	port := cfg.ServerPort
-	if port <= 0 {
-		port = 2298
-	}
-	proxyTarget, _ = url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
-
-	proxyPort := cfg.ProxyPort
-	if proxyPort <= 0 {
-		proxyPort = 2299
-	}
-	proxyAddr = fmt.Sprintf("0.0.0.0:%d", proxyPort)
+	proxyTarget, _ = url.Parse(fmt.Sprintf("http://127.0.0.1:%d", cfg.GetServerPort()))
+	proxyAddr = fmt.Sprintf("0.0.0.0:%d", cfg.GetProxyPort())
 }
 
 func listAllDNSNames() []string {
@@ -634,6 +624,8 @@ func proxyErrMessage() string {
 		return "服务响应异常"
 	case StatusBuilding:
 		return "服务正在构建"
+	case StatusSnapshotting:
+		return "服务快照维护中"
 	case StatusStopped:
 		return "服务未运行"
 	default:
@@ -739,25 +731,7 @@ const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none
 
 // injectHtmlPolyfill 将兼容补丁注入 HTML 的 head 头部
 func injectHtmlPolyfill(body []byte) []byte {
-	lower := bytes.ToLower(body)
-	idx := bytes.Index(lower, []byte("<head"))
-	if idx != -1 {
-		closeIdx := bytes.IndexByte(lower[idx:], '>')
-		if closeIdx != -1 {
-			insertPos := idx + closeIdx + 1
-			var res bytes.Buffer
-			res.Grow(len(body) + len(httpPolyfillScript))
-			res.Write(body[:insertPos])
-			res.WriteString(httpPolyfillScript)
-			res.Write(body[insertPos:])
-			return res.Bytes()
-		}
-	}
-	var res bytes.Buffer
-	res.Grow(len(body) + len(httpPolyfillScript))
-	res.WriteString(httpPolyfillScript)
-	res.Write(body)
-	return res.Bytes()
+	return injectHtmlHead(body, []byte(httpPolyfillScript))
 }
 
 // hasDshAuthCookie 判断 Cookie 标头是否包含官方 dsh-auth- 会话凭证

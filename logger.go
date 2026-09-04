@@ -29,6 +29,10 @@ var (
 	logSubs  = map[chan string]struct{}{}
 )
 
+func GetLogFilePath() string {
+	return logFilePathVal
+}
+
 func InitLogger(pkgVar string) {
 	_ = os.MkdirAll(pkgVar, 0755)
 	logFilePathVal = filepath.Join(pkgVar, "harness.log")

@@ -80,7 +80,7 @@
                           :class="tab === t.key ? 'scale-110' : 'scale-100'">
                           <component :is="t.icon" />
                         </n-icon>
-                        <span class="text-[11px] leading-tight transition-colors duration-150"
+                        <span class="text-[10.5px] leading-tight transition-colors duration-150 whitespace-nowrap"
                           :class="tab === t.key ? 'font-bold text-fnos-blue dark:text-blue-400' : 'font-normal text-slate-500 dark:text-slate-400'">
                           {{ t.label }}
                         </span>
@@ -126,7 +126,8 @@ import {
   Folder,
   Puzzle,
   FileText,
-  Settings
+  Settings,
+  History
 } from '@vicons/tabler'
 import { getThemeOverrides } from './theme'
 import Overview from './views/Overview.vue'
@@ -134,6 +135,7 @@ import Logs from './views/Logs.vue'
 import SettingsView from './views/Settings.vue'
 import Workspace from './views/Workspace.vue'
 import Plugins from './views/Plugins.vue'
+import Snapshots from './views/Snapshots.vue'
 import { useAppStore } from './stores/app'
 import { useSystemStore } from './stores/system'
 import { trimSdk } from './utils/trimSdk'
@@ -166,12 +168,13 @@ watch(themeMode, (mode) => {
 const currentTheme = computed(() => (themeMode.value === 'dark' ? darkTheme : null))
 const currentThemeOverrides = computed(() => getThemeOverrides(themeMode.value))
 
-type TabKey = 'overview' | 'workspace' | 'logs' | 'plugins' | 'settings'
+type TabKey = 'overview' | 'workspace' | 'logs' | 'plugins' | 'snapshots' | 'settings'
 
 const tabLabels: Record<TabKey, string> = {
   overview: '概览 · DeepSeek Harness',
   workspace: '工作区 · DeepSeek Harness',
   plugins: '插件管理 · DeepSeek Harness',
+  snapshots: '快照管理 · DeepSeek Harness',
   logs: '运行日志 · DeepSeek Harness',
   settings: '应用设置 · DeepSeek Harness'
 }
@@ -181,6 +184,7 @@ const views: Record<TabKey, Component> = {
   workspace: Workspace,
   logs: Logs,
   plugins: Plugins,
+  snapshots: Snapshots,
   settings: SettingsView
 }
 
@@ -192,6 +196,7 @@ const menuOptions: MenuOption[] = [
   { key: 'overview', label: '概览', icon: renderIcon(Dashboard) },
   { key: 'workspace', label: '工作区', icon: renderIcon(Folder) },
   { key: 'plugins', label: '插件管理', icon: renderIcon(Puzzle) },
+  { key: 'snapshots', label: '快照管理', icon: renderIcon(History) },
   { key: 'logs', label: '运行日志', icon: renderIcon(FileText) }
 ]
 
@@ -203,6 +208,7 @@ const mobileTabs = [
   { key: 'overview' as TabKey, label: '概览', icon: Dashboard },
   { key: 'workspace' as TabKey, label: '工作区', icon: Folder },
   { key: 'plugins' as TabKey, label: '插件', icon: Puzzle },
+  { key: 'snapshots' as TabKey, label: '快照', icon: History },
   { key: 'logs' as TabKey, label: '日志', icon: FileText },
   { key: 'settings' as TabKey, label: '设置', icon: Settings }
 ]

@@ -60,16 +60,16 @@
           <!-- 原生分割线 -->
           <n-divider class="!my-3.5 sm:!my-6" />
 
-          <!-- 下半部分：移动端扁长条 / 桌面端 3 列指标网格 -->
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-center">
-            <!-- 运行状态 -->
+          <!-- 下半部分：移动端 2 列 (运行时间放底部跨行) / 桌面端 5 列平铺指标网格 -->
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 text-center">
+            <!-- 运行状态 (移动端第 1 行左) -->
             <div
-              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              class="order-1 sm:order-1 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行状态</span>
-              <div class="flex items-center justify-end sm:justify-center sm:mt-1">
+              <div class="flex items-center justify-center sm:mt-1">
                 <n-tag :type="statusTagType" size="small" round :bordered="false"
                   class="font-medium text-xs scale-95 sm:scale-100 transition-all duration-200">
-                  <template #icon v-if="isBuilding || isStarting">
+                  <template #icon v-if="isBuilding || isStarting || isSnapshotting">
                     <n-spin :size="10" class="mr-0.5" />
                   </template>
                   {{ statusLabel }}
@@ -77,22 +77,42 @@
               </div>
             </div>
 
-            <!-- 运行时间 -->
+            <!-- 进程 PID (移动端第 1 行右) -->
             <div
-              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
-              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行时间</span>
-              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5">
-                {{ uptimeText }}
-              </div>
-            </div>
-
-            <!-- 进程 PID -->
-            <div
-              class="py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              class="order-2 sm:order-3 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
               <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">进程 PID</span>
               <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
                 :title="isRunning && statusData.pid ? String(statusData.pid) : '-'">
                 {{ isRunning && statusData.pid ? statusData.pid : '-' }}
+              </div>
+            </div>
+
+            <!-- CPU 占用 (移动端第 2 行左) -->
+            <div
+              class="order-3 sm:order-4 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">CPU 占用</span>
+              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+                :title="dshCpu">
+                {{ dshCpu }}
+              </div>
+            </div>
+
+            <!-- 内存占用 (移动端第 2 行右) -->
+            <div
+              class="order-4 sm:order-5 py-2 sm:py-3.5 px-3 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-col justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">内存占用</span>
+              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5"
+                :title="dshMemory">
+                {{ dshMemory }}
+              </div>
+            </div>
+
+            <!-- 运行时间 (移动端底部第 3 行单独全宽跨行 / 桌面端居中第 2 列) -->
+            <div
+              class="order-5 sm:order-2 col-span-2 sm:col-span-1 py-2 sm:py-3.5 px-3.5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-white/[0.03] border border-slate-100/80 dark:border-white/[0.06] flex flex-row sm:flex-col justify-between sm:justify-center items-center gap-1 transition-all duration-200 hover:border-slate-200/90 dark:hover:border-white/[0.12] hover:bg-slate-100/50 dark:hover:bg-white/[0.06]">
+              <span class="text-xs text-slate-400 dark:text-slate-500 font-medium">运行时间</span>
+              <div class="text-xs sm:text-base font-bold text-slate-700 dark:text-slate-200 font-mono truncate sm:mt-0.5">
+                {{ uptimeText }}
               </div>
             </div>
           </div>
@@ -139,8 +159,8 @@
 
     <!-- 底部状态通知区 -->
     <div v-auto-animate class="space-y-3">
-      <!-- 实时构建进度 / 启动中 / 错误信息 -->
-      <n-alert v-if="statusData.last_message" :type="isBuilding || isStarting ? 'info' : 'warning'" :show-icon="true"
+      <!-- 实时构建进度 / 启动中 / 快照中 / 错误信息 -->
+      <n-alert v-if="statusData.last_message" :type="isBuilding || isStarting || isSnapshotting ? 'info' : 'warning'" :show-icon="true"
         class="rounded-2xl shadow-sm">
         {{ statusData.last_message }}
       </n-alert>
@@ -200,14 +220,12 @@
 import { ref, computed, onMounted, type Component } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
-  NPageHeader,
   NCard,
   NDivider,
   NButton,
   NTag,
   NGrid,
   NGi,
-  NStatistic,
   NAlert,
   NSpin,
   NIcon,
@@ -248,9 +266,12 @@ const {
   isRunning,
   isStarting,
   isBuilding,
+  isSnapshotting,
   statusTagType,
   statusLabel,
-  uptimeText
+  uptimeText,
+  dshCpu,
+  dshMemory
 } = storeToRefs(systemStore)
 
 onMounted(() => {

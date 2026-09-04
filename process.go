@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,6 +168,21 @@ func findDshPidOnPort(port int) int {
 	return 0
 }
 
+// GetActiveDshPid 获取当前存活运行的 DSH 进程 PID（优先端口活跃进程，其次 pid 文件）
+func GetActiveDshPid(port int) int {
+	if port > 0 {
+		if pid := findDshPidOnPort(port); pid > 0 {
+			return pid
+		}
+	}
+	if data, err := os.ReadFile(pidFilePath()); err == nil {
+		if p, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && p > 0 && isProcessAlive(p) {
+			return p
+		}
+	}
+	return 0
+}
+
 // waitForPortFree 循环检测端口是否彻底释放（最多等待 500ms）
 func waitForPortFree(port int) {
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -203,11 +219,7 @@ func killHarnessLocked() {
 	}
 
 	// 清理端口上的 DSH 残留进程
-	cfg := GetConfig()
-	port := cfg.ServerPort
-	if port <= 0 {
-		port = 2298
-	}
+	port := GetConfig().GetServerPort()
 	for _, pid := range findPidsOnPort(port) {
 		if isProcessAlive(pid) {
 			if isDshProcess(pid) {
@@ -247,11 +259,7 @@ func StartWatchdog() {
 // inspectAndHeal 主动巡检与自愈维护
 func inspectAndHeal() {
 	curStatus := state.Status()
-	cfg := GetConfig()
-	port := cfg.ServerPort
-	if port <= 0 {
-		port = 2298
-	}
+	port := GetConfig().GetServerPort()
 
 	if curStatus == StatusRunning || curStatus == StatusStarting {
 		procMu.Lock()
@@ -324,3 +332,224 @@ func inspectAndHeal() {
 		}
 	}
 }
+
+type procSample struct {
+	ticks uint64
+	total uint64
+}
+
+var (
+	usageCacheMu sync.RWMutex
+	cachedCpu    = "-"
+	cachedMem    = "-"
+
+	usageSampleMu sync.Mutex
+	lastSample    procSample
+	lastSamplePid int
+	lastSampleAt  time.Time
+)
+
+// GetCachedDshUsage 获取后台单例采集的 DSH CPU 与内存指标
+func GetCachedDshUsage() (string, string) {
+	usageCacheMu.RLock()
+	defer usageCacheMu.RUnlock()
+	return cachedCpu, cachedMem
+}
+
+// StartUsageSampler 启动系统指标单例采集协程
+func StartUsageSampler() {
+	go func() {
+		ticker := time.NewTicker(3 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			sampleDshUsageOnce()
+		}
+	}()
+}
+
+func sampleDshUsageOnce() {
+	if state.Status() != StatusRunning || runtime.GOOS != "linux" {
+		usageCacheMu.Lock()
+		cachedCpu = "-"
+		cachedMem = "-"
+		usageCacheMu.Unlock()
+		return
+	}
+
+	pid := GetActiveDshPid(GetConfig().GetServerPort())
+	if pid <= 0 {
+		usageCacheMu.Lock()
+		cachedCpu = "-"
+		cachedMem = "-"
+		usageCacheMu.Unlock()
+		return
+	}
+
+	cpuStr, memStr := calculateDshUsage(pid)
+	usageCacheMu.Lock()
+	cachedCpu = cpuStr
+	cachedMem = memStr
+	usageCacheMu.Unlock()
+}
+
+// readProcRssKb 读取单进程常驻物理内存 (KB)
+func readProcRssKb(pid int) uint64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				if kb, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
+					return kb
+				}
+			}
+			break
+		}
+	}
+	return 0
+}
+
+// readSystemTotalJiffies 读取系统总 CPU 时间 (所有核心累加)
+func readSystemTotalJiffies() uint64 {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 1 && fields[0] == "cpu" {
+			var total uint64
+			for _, val := range fields[1:] {
+				if num, err := strconv.ParseUint(val, 10, 64); err == nil {
+					total += num
+				}
+			}
+			return total
+		}
+	}
+	return 0
+}
+
+// parseProcStat 解析 /proc/[pid]/stat，提取 ppid, pgrp 以及 CPU ticks (utime + stime)
+func parseProcStat(pid int) (ppid, pgrp int, ticks uint64, ok bool) {
+	statData, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	content := string(statData)
+	idx := strings.LastIndex(content, ")")
+	if idx == -1 || idx+2 >= len(content) {
+		return 0, 0, 0, false
+	}
+	fields := strings.Fields(content[idx+2:])
+	if len(fields) < 13 {
+		return 0, 0, 0, false
+	}
+
+	ppid, _ = strconv.Atoi(fields[1])
+	pgrp, _ = strconv.Atoi(fields[2])
+	utime, _ := strconv.ParseUint(fields[11], 10, 64)
+	stime, _ := strconv.ParseUint(fields[12], 10, 64)
+	return ppid, pgrp, utime + stime, true
+}
+
+// getDshTreeStats 聚合主 PID 及其所属进程组内所有 DSH 进程的 CPU 时间与常驻内存 (KB)
+func getDshTreeStats(mainPid int) (totalTicks uint64, totalRssKb uint64) {
+	if mainPid <= 0 || runtime.GOOS != "linux" {
+		return 0, 0
+	}
+
+	targetPgrp := mainPid
+	if _, pg, _, ok := parseProcStat(mainPid); ok && pg > 0 {
+		targetPgrp = pg
+	}
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		// 无法读取 /proc 目录时降级为统计主进程单体
+		_, _, ticks, _ := parseProcStat(mainPid)
+		return ticks, readProcRssKb(mainPid)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(entry.Name())
+		if err != nil || pid <= 0 {
+			continue
+		}
+
+		ppid, pgrp, ticks, ok := parseProcStat(pid)
+		if !ok {
+			continue
+		}
+
+		if pid == mainPid || (targetPgrp > 0 && pgrp == targetPgrp) || ppid == mainPid {
+			totalTicks += ticks
+			totalRssKb += readProcRssKb(pid)
+		}
+	}
+
+	return totalTicks, totalRssKb
+}
+
+// calculateDshUsage 计算 DSH 服务及其子进程树的整机 CPU 与物理内存占用
+func calculateDshUsage(pid int) (string, string) {
+	if pid <= 0 || runtime.GOOS != "linux" {
+		return "-", "-"
+	}
+
+	procTicks, totalRssKb := getDshTreeStats(pid)
+	if procTicks == 0 && totalRssKb == 0 {
+		return "-", "-"
+	}
+
+	// 格式化内存
+	var memStr string
+	if totalRssKb >= 1024*1024 {
+		memStr = fmt.Sprintf("%.1f GB", float64(totalRssKb)/(1024*1024))
+	} else {
+		memStr = fmt.Sprintf("%.1f MB", float64(totalRssKb)/1024)
+	}
+
+	sysTotal := readSystemTotalJiffies()
+	if sysTotal == 0 {
+		return "-", memStr
+	}
+
+	usageSampleMu.Lock()
+	defer usageSampleMu.Unlock()
+
+	// 进程重启、时钟回跳或子进程退出导致 ticks 减少时重置样本，防止无符号下溢
+	if lastSamplePid != pid || procTicks < lastSample.ticks || sysTotal <= lastSample.total {
+		lastSamplePid = pid
+		lastSample = procSample{ticks: procTicks, total: sysTotal}
+		lastSampleAt = time.Now()
+		return "0.0%", memStr
+	}
+
+	deltaSys := sysTotal - lastSample.total
+	deltaProc := procTicks - lastSample.ticks
+
+	lastSample = procSample{ticks: procTicks, total: sysTotal}
+	lastSampleAt = time.Now()
+
+	if deltaSys == 0 || deltaProc == 0 {
+		return "0.0%", memStr
+	}
+
+	// 计算相对整机总 CPU 算力的使用百分比 (0.0% ~ 100.0%)
+	pct := (float64(deltaProc) / float64(deltaSys)) * 100.0
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100.0 {
+		pct = 100.0
+	}
+	return fmt.Sprintf("%.1f%%", pct), memStr
+}
+

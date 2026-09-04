@@ -7,7 +7,10 @@ import type {
   PluginStatus,
   PreviewResult,
   LogData,
-  SettingsConfig
+  SettingsConfig,
+  SnapshotSummary,
+  SnapshotMeta,
+  CreateSnapshotParams
 } from '../types/api'
 
 /**
@@ -56,3 +59,17 @@ export const configApi = {
   getConfig: () => http.get<SettingsConfig>('config'),
   saveConfig: (config: SettingsConfig) => http.post<SettingsConfig>('config', config)
 }
+
+/**
+ * 快照管理 API
+ */
+export const snapshotApi = {
+  getList: () => http.get<SnapshotSummary>('snapshots'),
+  create: (params: CreateSnapshotParams) =>
+    http.post<SnapshotMeta>('snapshots', params, { timeout: 600000 }),
+  restore: (id: string) =>
+    http.post(`snapshots/${encodeURIComponent(id)}/restore`, undefined, { timeout: 600000 }),
+  delete: (id: string) => http.delete(`snapshots/${encodeURIComponent(id)}`)
+}
+
+

@@ -217,53 +217,12 @@ func profileHasWorkspace() bool {
 	return err == nil
 }
 
-// resolveUpdateTarget 智能解析待更新插件的真实目标来源 (支持 Git 依赖、Scoped 包名与 @latest)
-func resolveUpdateTarget(spec string) string {
-	norm := normalizePluginKey(spec)
-	deps, _, _, err := readProfileManifest()
-	if err == nil && deps != nil {
-		if origSpec, exists := deps[norm]; exists && origSpec != "" {
-			if strings.HasPrefix(origSpec, "github:") ||
-				strings.HasPrefix(origSpec, "git+") ||
-				strings.HasPrefix(origSpec, "http:") ||
-				strings.HasPrefix(origSpec, "https:") {
-				return origSpec
-			}
-		}
-	}
-
-	target := norm
-	// 针对 npm 包名（包含 scoped 作用域包）精准锁定最新版本 @latest
-	if strings.HasPrefix(target, "@") {
-		// scoped 包（如 @cordisjs/plugin-xxx），检查除去开头的 @ 之后是否显式指定了版本
-		if !strings.Contains(target[1:], "@") {
-			target = target + "@latest"
-		}
-	} else if !strings.Contains(target, "@") && !strings.HasPrefix(target, "github:") {
-		target = target + "@latest"
-	}
-	return target
-}
-
 func (c *pluginCommand) dshArgs() []string {
-	if c.Verb == pluginUpdate {
-		// 更新操作重构：注入 minimumReleaseAge=0 穿透 pnpm 11 新鲜期限制，并解析真实最新目标
-		args := []string{"plugin", "--profile", c.Profile, "add"}
-		if profileHasWorkspace() {
+	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
+	if c.Verb != pluginList && c.Verb != pluginWhy {
+		if c.Verb != pluginInstall && profileHasWorkspace() {
 			args = append(args, "-w")
 		}
-		args = append(args, "--config.minimumReleaseAge=0")
-		for _, spec := range c.Specs {
-			args = append(args, resolveUpdateTarget(spec))
-		}
-		return args
-	}
-
-	args := []string{"plugin", "--profile", c.Profile, string(c.Verb)}
-	if (c.Verb == pluginAdd || c.Verb == pluginRemove) && profileHasWorkspace() {
-		args = append(args, "-w")
-	}
-	if c.Verb == pluginAdd || c.Verb == pluginInstall || c.Verb == pluginRemove {
 		args = append(args, "--config.minimumReleaseAge=0")
 	}
 	args = append(args, c.Specs...)
@@ -622,15 +581,6 @@ func pluginFailMessage(err error, tail string) string {
 	return msg
 }
 
-func shortPluginFailReason(err error) string {
-	msg := err.Error()
-	if strings.Contains(msg, "ERR_PNPM_IGNORED_BUILDS") ||
-		strings.Contains(msg, "approve-builds") ||
-		strings.Contains(msg, "allowBuilds") {
-		return "构建脚本被 pnpm 拦截，已自动配置放行并重试"
-	}
-	return msg
-}
 
 var (
 	activePluginCmdMu    sync.Mutex
@@ -877,16 +827,6 @@ func runPluginOpWithRecovery(cmd *pluginCommand, doneMsg string) (string, error)
 		failure = ClassifyPnpmFailure(runErr.Error())
 	}
 
-	// 新发布版本安全拦截自愈
-	if failure.Code == PnpmFailureReleaseAge {
-		LogWarning("[自动自愈] 新发布版本受安全期检查拦截，已自动追加 --config.minimumReleaseAge=0 重试...")
-		retryArgs := append([]string{}, args...)
-		retryArgs = append(retryArgs, "--config.minimumReleaseAge=0")
-		if runErr = runPluginSubprocess(retryArgs, timeout); runErr == nil {
-			return doneMsg + "（已自动放行新发布版本）", nil
-		}
-		failure = ClassifyPnpmFailure(runErr.Error())
-	}
 
 	// 大包下载超时自愈
 	if failure.Code == PnpmFailureFetchTimeout {
@@ -939,7 +879,7 @@ func launchPluginOp(cmd *pluginCommand, doneMsg string) {
 
 		msg, runErr := runPluginOpWithRecovery(cmd, doneMsg)
 		if runErr != nil {
-			LogWarning("插件执行失败: %s", shortPluginFailReason(runErr))
+			LogWarning("插件执行失败: %s", runErr)
 			setPluginDone(false, runErr.Error())
 			return
 		}

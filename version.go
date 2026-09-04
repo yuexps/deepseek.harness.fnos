@@ -14,11 +14,6 @@ var (
 	cachedAppCheckMutex sync.Mutex
 )
 
-// getAppVersion 获取当前应用版本号
-func getAppVersion() string {
-	return globalAppVer
-}
-
 // getAppRemoteVersion 获取远端最新版本号
 func getAppRemoteVersion() string {
 	cachedAppCheckMutex.Lock()
@@ -43,7 +38,7 @@ func checkAppHasUpdate(localVer string) bool {
 
 // fetchAppRemoteUpdate 拉取远端最新版本
 func fetchAppRemoteUpdate() {
-	localVer := getAppVersion()
+	localVer := globalAppVer
 	if localVer == "" {
 		return
 	}

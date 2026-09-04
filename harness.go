@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	StatusStopped  = "stopped"
-	StatusStarting = "starting"
-	StatusRunning  = "running"
-	StatusBuilding = "building"
+	StatusStopped      = "stopped"
+	StatusStarting     = "starting"
+	StatusRunning      = "running"
+	StatusBuilding     = "building"
+	StatusSnapshotting = "snapshotting"
 )
 
 type HarnessState struct {
@@ -218,6 +219,7 @@ func InitHarness(pkgVar, appdest string) {
 
 	KillHarness()
 	StartWatchdog()
+	StartUsageSampler()
 
 	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
 	zipVer := readAppDestVersion()
@@ -281,6 +283,9 @@ func Start() error {
 
 	if state.Status() == StatusBuilding {
 		return fmt.Errorf("正在构建中，请稍候再试")
+	}
+	if state.Status() == StatusSnapshotting {
+		return fmt.Errorf("正在执行快照维护，请稍候再试")
 	}
 	if state.Status() == StatusStarting {
 		return fmt.Errorf("服务正在启动中，请稍候")
@@ -388,10 +393,7 @@ func startLocked() error {
 	}
 
 	cfg := GetConfig()
-	port := cfg.ServerPort
-	if port <= 0 {
-		port = 2298
-	}
+	port := cfg.GetServerPort()
 
 	bin, args := dshCliCmd("web", "--port", fmt.Sprintf("%d", port), "--no-open")
 	cmd := exec.Command(bin, args...)

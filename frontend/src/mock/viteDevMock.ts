@@ -49,6 +49,31 @@ export function viteDevMock(): Plugin {
         }
       ]
 
+      let mockSnapshots = [
+        {
+          id: 'snap_20260901_103000_a1b',
+          name: '初始稳定生产版',
+          created_at: Math.floor(Date.now() / 1000) - 86400 * 3,
+          size_bytes: 1480000000,
+          app_version: '0.3.0',
+          git_commit: '7b8f9a2',
+          harness_version: '0.2.8-4',
+          version_tag: 'v0.2.8-4 (7b8f9a2)',
+          plugin_count: 2
+        },
+        {
+          id: 'snap_20260903_142000_c3d',
+          name: '测试第三方插件前备份',
+          created_at: Math.floor(Date.now() / 1000) - 3600 * 5,
+          size_bytes: 1720000000,
+          app_version: '0.3.0',
+          git_commit: '7b8f9a2',
+          harness_version: '0.2.8-4',
+          version_tag: 'v0.2.8-4 (7b8f9a2)',
+          plugin_count: 2
+        }
+      ]
+
       let plugins: PluginItem[] = [
         {
           name: '@deepseek-ai/dsh-settings',
@@ -142,8 +167,18 @@ export function viteDevMock(): Plugin {
           build_time: config.build_time,
           app_url: `/app/deepseek-harness/`,
           pid,
+          cpu: status === 'running' ? getMockCpu() : '-',
+          memory: status === 'running' ? getMockMemory() : '-',
           last_message: lastMessage
         }
+      }
+
+      function getMockCpu(): string {
+        return (1.2 + Math.random() * 2.1).toFixed(1) + '%'
+      }
+
+      function getMockMemory(): string {
+        return (240 + Math.floor(Math.random() * 12)) + ' MB'
       }
 
       function formatUptime(seconds: number): string {
@@ -175,11 +210,39 @@ export function viteDevMock(): Plugin {
         })
       }
 
+      // 定期推送进程资源指标
+      setInterval(() => {
+        if (status === 'running') {
+          broadcast('usage', { cpu: getMockCpu(), memory: getMockMemory() })
+        } else {
+          broadcast('usage', { cpu: '-', memory: '-' })
+        }
+      }, 3000)
+
+      function getMockSnapshotPayload() {
+        const totalSize = mockSnapshots.reduce((acc, cur) => acc + (cur.size_bytes || 0), 0)
+        return {
+          items: mockSnapshots,
+          total_size_bytes: totalSize,
+          disk_free_bytes: 48 * 1024 * 1024 * 1024,
+          disk_total_bytes: 128 * 1024 * 1024 * 1024
+        }
+      }
+
       wss.on('connection', (ws) => {
         clients.add(ws)
         ws.send(JSON.stringify({ type: 'status', data: getStatusPayload(), timestamp: Date.now() }))
+        ws.send(JSON.stringify({
+          type: 'usage',
+          data: {
+            cpu: status === 'running' ? getMockCpu() : '-',
+            memory: status === 'running' ? getMockMemory() : '-'
+          },
+          timestamp: Date.now()
+        }))
         ws.send(JSON.stringify({ type: 'workspace', data: { items: workspaces, archivedSessionIds: [] }, timestamp: Date.now() }))
         ws.send(JSON.stringify({ type: 'plugin', data: { running: activePluginTask !== null }, timestamp: Date.now() }))
+        ws.send(JSON.stringify({ type: 'snapshot', data: getMockSnapshotPayload(), timestamp: Date.now() }))
 
         ws.on('message', (msg) => {
           try {
@@ -567,8 +630,73 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, '应用设置保存成功', config)
         }
 
+        // 快照管理 Mock
+        if (path.endsWith('/api/snapshots') && req.method === 'GET') {
+          return sendJson(res, 0, 'success', getMockSnapshotPayload())
+        }
+
+        if (path.endsWith('/api/snapshots') && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const oldStatus = status
+          status = 'snapshotting'
+          lastMessage = '正在安全暂停服务准备创建快照...'
+          broadcast('status', getStatusPayload())
+          appendLog('[INFO] 正在安全暂停服务，确保数据彻底落盘以创建纯净冷备快照...')
+
+          const newSnap = {
+            id: `snap_${Date.now()}_mock`,
+            name: body.name || '新建快照',
+            created_at: Math.floor(Date.now() / 1000),
+            size_bytes: 1560000000,
+            app_version: '0.3.0',
+            git_commit: config.commit,
+            harness_version: config.version,
+            version_tag: `v${config.version} (${config.commit})`,
+            plugin_count: plugins.length
+          }
+          mockSnapshots.unshift(newSnap)
+
+          setTimeout(() => {
+            status = oldStatus
+            lastMessage = ''
+            appendLog(`[INFO] 快照 [${newSnap.name}] 创建成功`)
+            broadcast('status', getStatusPayload())
+            broadcast('snapshot', getMockSnapshotPayload())
+          }, 1500)
+
+          return sendJson(res, 0, '快照创建成功', newSnap)
+        }
+
+        if (path.includes('/api/snapshots/') && path.endsWith('/restore') && req.method === 'POST') {
+          const oldStatus = status
+          status = 'snapshotting'
+          lastMessage = '正在停止服务准备还原快照...'
+          broadcast('status', getStatusPayload())
+          appendLog('[INFO] 正在安全停止服务并干净还原快照...')
+
+          setTimeout(() => {
+            status = 'running'
+            lastMessage = ''
+            appendLog('[INFO] 快照数据恢复完成，服务已重新拉起')
+            broadcast('status', getStatusPayload())
+            broadcast('snapshot', getMockSnapshotPayload())
+          }, 2000)
+
+          return sendJson(res, 0, '快照已成功还原，服务正在重新拉起', null)
+        }
+
+        if (path.includes('/api/snapshots/') && req.method === 'DELETE') {
+          const id = path.split('/').pop()
+          mockSnapshots = mockSnapshots.filter((s) => s.id !== id)
+          appendLog(`[INFO] 快照 [${id}] 已删除`)
+          broadcast('snapshot', getMockSnapshotPayload())
+          return sendJson(res, 0, '快照已成功删除', null)
+        }
+
         next()
       })
     }
   }
 }
+
+

@@ -113,6 +113,7 @@ trim-cli 是 TRIM NAS（fnOS）的命令行客户端。通过 WebSocket 与 NAS 
 - 可通过 `TRIM_CLI_CONFIG_DIR` 环境变量覆盖配置目录
 - 可通过 `TRIM_CLI_SESSION_STORAGE=file` 强制使用文件 session，适合多目标真机测试或 CI 隔离；文件模式属于较低信任模式
 - 可通过 `TRIM_CLI_SESSION_STORAGE=ask-file` 在安全存储写失败时人工确认是否降级写入低信任文件；非交互环境不会降级
+- DSH 沙箱默认仅允许写当前工作区；写入宿主凭据受阻需申请提权，或指定 `TRIM_CLI_CONFIG_DIR="$PWD/.trim-cli"`
 - Session 会保存 `token`、`longToken`、`backId`、`secret` 等会话材料，不保存明文密码
 - CLI 的 JSON 输出和错误输出会对密码、token、secret、授权头、敏感 Docker 环境变量和敏感 URL 字段做脱敏处理
 

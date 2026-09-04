@@ -405,6 +405,12 @@ func buildLandlock() error {
 
 // buildFromSource 专用于在线升级拉取或强制重建时的源码编译流程
 func buildFromSource(forceClean bool) error {
+	// 源码构建前置系统资源检查 (内存、硬盘、CPU)
+	if err := CheckResourceForBuild(); err != nil {
+		LogWarning("构建前资源预检未通过: %s", err)
+		return err
+	}
+
 	state.SetStatus(StatusBuilding, "正在准备编译环境...")
 	if err := ensureTool("gcc", "build-essential"); err != nil {
 		return err

@@ -15,6 +15,8 @@ export const useSystemStore = defineStore('system', () => {
     started_at: 0,
     build_time: '-',
     app_url: '/app/deepseek-harness/',
+    cpu: '-',
+    memory: '-',
     last_message: ''
   })
 
@@ -117,12 +119,13 @@ export const useSystemStore = defineStore('system', () => {
   const isRunning = computed(() => statusData.value.status === 'running')
   const isStarting = computed(() => statusData.value.status === 'starting')
   const isBuilding = computed(() => statusData.value.status === 'building')
-  const isActionLocked = computed(() => Boolean(activeAction.value) || isBuilding.value || isStarting.value)
+  const isSnapshotting = computed(() => statusData.value.status === 'snapshotting')
+  const isActionLocked = computed(() => Boolean(activeAction.value) || isBuilding.value || isStarting.value || isSnapshotting.value)
 
   const statusTagType = computed<'success' | 'warning' | 'info' | 'default'>(() => {
     if (isRunning.value) return 'success'
     if (isStarting.value) return 'warning'
-    if (isBuilding.value) return 'info'
+    if (isBuilding.value || isSnapshotting.value) return 'info'
     return 'default'
   })
 
@@ -130,6 +133,7 @@ export const useSystemStore = defineStore('system', () => {
     if (isRunning.value) return '运行中'
     if (isStarting.value) return '启动中'
     if (isBuilding.value) return '构建中'
+    if (isSnapshotting.value) return '快照中'
     return '已停止'
   })
 
@@ -221,6 +225,14 @@ export const useSystemStore = defineStore('system', () => {
     }
   }
 
+  const dshCpu = computed(() => (isRunning.value ? (statusData.value.cpu || '0.0%') : '-'))
+  const dshMemory = computed(() => (isRunning.value ? (statusData.value.memory || '-') : '-'))
+
+  function updateUsage(cpu?: string, memory?: string) {
+    if (cpu !== undefined) statusData.value.cpu = cpu
+    if (memory !== undefined) statusData.value.memory = memory
+  }
+
   return {
     statusData,
     statusLoaded,
@@ -232,9 +244,13 @@ export const useSystemStore = defineStore('system', () => {
     isRunning,
     isStarting,
     isBuilding,
+    isSnapshotting,
     statusTagType,
     statusLabel,
     uptimeText,
+    dshCpu,
+    dshMemory,
+    updateUsage,
     startClock,
     stopClock,
     setWsConnected,

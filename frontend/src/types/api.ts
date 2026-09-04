@@ -18,7 +18,7 @@ export type RequestResult<T> =
 /**
  * 服务运行状态枚举
  */
-export type ServiceStatus = 'stopped' | 'starting' | 'running' | 'building'
+export type ServiceStatus = 'stopped' | 'starting' | 'running' | 'building' | 'snapshotting'
 
 /**
  * 系统运行状态模型
@@ -39,6 +39,8 @@ export interface StatusData {
   build_time: string
   app_url: string
   pid?: number
+  cpu?: string
+  memory?: string
   last_message: string
 }
 
@@ -169,3 +171,39 @@ export interface WSEnvelope<T = unknown> {
   data: T
   timestamp?: number
 }
+
+/**
+ * 快照元数据模型
+ */
+export interface SnapshotMeta {
+  id: string
+  name: string
+  created_at: number
+  size_bytes: number
+  compression_level?: number
+  app_version?: string
+  git_commit?: string
+  harness_version?: string
+  version_tag?: string
+  plugin_count?: number
+}
+
+/**
+ * 快照列表与存储汇总
+ */
+export interface SnapshotSummary {
+  items: SnapshotMeta[]
+  total_size_bytes: number
+  disk_free_bytes: number
+  disk_total_bytes: number
+}
+
+/**
+ * 创建快照参数
+ */
+export interface CreateSnapshotParams {
+  name: string
+  compression_level?: number
+}
+
+

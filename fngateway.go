@@ -38,10 +38,7 @@ func InitFnGateway(base *gin.RouterGroup) {
 // handleFnGateway 飞牛网关核心反向代理处理器
 func handleFnGateway(c *gin.Context) {
 	// 获取后端监听端口
-	serverPort := GetConfig().ServerPort
-	if serverPort <= 0 {
-		serverPort = 2298
-	}
+	serverPort := GetConfig().GetServerPort()
 	targetURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", serverPort))
 
 	// 构建反向代理
@@ -246,27 +243,29 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 		return match
 	})
 
-	// 注入桥接脚本
-	bridge := []byte(fnGatewayBridgeScript())
-	lower := bytes.ToLower(modified)
+	return injectHtmlHead(modified, []byte(fnGatewayBridgeScript()))
+}
+
+// injectHtmlHead 将补丁脚本注入 HTML 的 head 头部
+func injectHtmlHead(body, script []byte) []byte {
+	lower := bytes.ToLower(body)
 	idx := bytes.Index(lower, []byte("<head"))
 	if idx != -1 {
 		closeIdx := bytes.IndexByte(lower[idx:], '>')
 		if closeIdx != -1 {
 			insertPos := idx + closeIdx + 1
 			var res bytes.Buffer
-			res.Grow(len(modified) + len(bridge))
-			res.Write(modified[:insertPos])
-			res.Write(bridge)
-			res.Write(modified[insertPos:])
+			res.Grow(len(body) + len(script))
+			res.Write(body[:insertPos])
+			res.Write(script)
+			res.Write(body[insertPos:])
 			return res.Bytes()
 		}
 	}
-
 	var res bytes.Buffer
-	res.Grow(len(modified) + len(bridge))
-	res.Write(bridge)
-	res.Write(modified)
+	res.Grow(len(body) + len(script))
+	res.Write(script)
+	res.Write(body)
 	return res.Bytes()
 }
 
@@ -823,6 +822,12 @@ func serveFnGatewayStatusPage(w http.ResponseWriter, r *http.Request, err error)
 		desc = "正在同步依赖与编译运行环境"
 		badgeClass = "badge-starting"
 		badgeText = "构建中"
+		isStarting = true
+	case StatusSnapshotting:
+		title = "快照维护中"
+		desc = "正在安全执行系统快照备份或还原操作"
+		badgeClass = "badge-starting"
+		badgeText = "快照中"
 		isStarting = true
 	case StatusStopped:
 		title = "服务未运行"

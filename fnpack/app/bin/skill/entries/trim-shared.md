@@ -30,6 +30,7 @@ description: 当任务涉及登录、连接目标、session 回落、wrapper 用
 - 远程明文 `ws://` 需要显式传 `--allow-insecure-ws`
 - session 默认使用平台安全存储；只有在测试或 CI 隔离时才显式使用 `TRIM_CLI_SESSION_STORAGE=file`
 - 如需在安全存储写失败时人工确认低信任降级，可显式使用 `TRIM_CLI_SESSION_STORAGE=ask-file`
+- DSH 沙箱默认仅允许写当前工作区；写入宿主凭据受阻需申请提权，或指定 `TRIM_CLI_CONFIG_DIR="$PWD/.trim-cli"`
 - 首次执行登录或真机操作时，不要假设默认凭据
 - 连接失败时，应明确提示正在尝试的 `host:port`
 - profile 名必须非空，且只能包含 ASCII 字母、数字、`_`、`-`、`.`
