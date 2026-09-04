@@ -235,7 +235,7 @@ function openCreateModal() {
   showCreateModal.value = true
 }
 
-async function handleCreateSnapshot() {
+function handleCreateSnapshot() {
   const name = snapName.value.trim()
   if (!name) {
     message.warning('请输入快照名称')
@@ -245,23 +245,23 @@ async function handleCreateSnapshot() {
     message.warning(`已存在同名快照「${name}」，请更换名称`)
     return false
   }
-  try {
-    const res = await snapshotStore.createSnapshot({
-      name,
-      compression_level: compressionLevel.value
-    })
+
+  showCreateModal.value = false
+
+  void snapshotStore.createSnapshot({
+    name,
+    compression_level: compressionLevel.value
+  }).then(res => {
     if (res.success) {
       message.success('快照创建成功')
-      showCreateModal.value = false
-      return true
     } else {
       message.error(res.message || '创建快照失败')
-      return false
     }
-  } catch (err: any) {
+  }).catch((err: any) => {
     message.error(err?.message || '创建快照失败')
-    return false
-  }
+  })
+
+  return true
 }
 
 function promptRestore(item: SnapshotMeta) {
