@@ -126,12 +126,6 @@ func (s *HarnessState) Poke() {
 	s.notify()
 }
 
-var (
-	srcDir    string
-	appDest   string
-	pkgVarDir string
-)
-
 // isRuntimeReady 校验工作区产物与依赖是否完备
 func isRuntimeReady() bool {
 	if fi, err := os.Stat(srcDir); err != nil || !fi.IsDir() {
@@ -212,16 +206,12 @@ func deployPrebuilt(tarPath, zipVer string, isUpgrade bool) {
 	}()
 }
 
-func InitHarness(pkgVar, appdest string) {
-	pkgVarDir = pkgVar
-	srcDir = filepath.Join(pkgVar, "src", "deepseek-harness")
-	appDest = appdest
-
+func InitHarness() {
 	KillHarness()
 	StartWatchdog()
 	StartUsageSampler()
 
-	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
+	tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
 	zipVer := readAppDestVersion()
 
 	// 评估预构建包部署决策
@@ -261,7 +251,7 @@ func InitHarness(pkgVar, appdest string) {
 
 	// 常规启动并按上次状态自启
 	refreshCommit()
-	ApplyBuiltinSkillConfig(pkgVar, appdest)
+	ApplyBuiltinSkillConfig()
 	go func() {
 		_ = installPnpm()
 	}()
@@ -387,7 +377,7 @@ func startLocked() error {
 	SetCurrentLaunchToken("")
 
 	// 保护敏感凭据文件仅属主可读写 (mode 600)
-	credFile := filepath.Join(pkgVarDir, "dsh-data", ".credentials.yaml")
+	credFile := filepath.Join(globalDshHome, ".credentials.yaml")
 	if _, err := os.Stat(credFile); err == nil {
 		_ = os.Chmod(credFile, 0600)
 	}

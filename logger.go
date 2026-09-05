@@ -33,9 +33,9 @@ func GetLogFilePath() string {
 	return logFilePathVal
 }
 
-func InitLogger(pkgVar string) {
-	_ = os.MkdirAll(pkgVar, 0755)
-	logFilePathVal = filepath.Join(pkgVar, "harness.log")
+func InitLogger() {
+	_ = os.MkdirAll(globalPkgVar, 0755)
+	logFilePathVal = filepath.Join(globalPkgVar, "harness.log")
 
 	logMu.Lock()
 	defer logMu.Unlock()

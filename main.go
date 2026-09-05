@@ -16,34 +16,52 @@ import (
 var embeddedWebFS embed.FS
 
 var (
-	globalPkgVar string
-	globalAppVer string
+	globalPkgVar       string
+	globalAppVer       string
+	globalAppDest      string
+	globalRunUser      string
+	globalDshHome      string
+	globalHomeDir      string
+	globalPnpmDir      string
+	globalPnpmHome     string
+	globalNpmCache     string
+	globalPluginsDir   string
+	globalSnapshotsDir string
+	srcDir             string
 )
 
 func main() {
-	pkgVar := os.Getenv("DATA_LIBRARY_PATH")
-	if pkgVar == "" {
+	globalPkgVar = os.Getenv("DATA_LIBRARY_PATH")
+	if globalPkgVar == "" {
 		LogFatal("环境变量缺失: DATA_LIBRARY_PATH")
 	}
-	globalPkgVar = pkgVar
 
-	appdest := os.Getenv("TRIM_APPDEST")
-	if appdest == "" {
+	globalAppDest = strings.TrimSpace(os.Getenv("TRIM_APPDEST"))
+	if globalAppDest == "" {
 		LogFatal("环境变量缺失: TRIM_APPDEST")
 	}
 
-	appVer := os.Getenv("TRIM_APPVER")
-	if appVer == "" {
+	globalAppVer = strings.TrimSpace(os.Getenv("TRIM_APPVER"))
+	if globalAppVer == "" {
 		LogFatal("环境变量缺失: TRIM_APPVER")
 	}
-	globalAppVer = strings.TrimSpace(appVer)
 
-	InitLogger(pkgVar)
-	runUser := os.Getenv("DSH_RUN_USER")
-	if runUser == "" {
-		runUser = "root"
+	globalRunUser = os.Getenv("DSH_RUN_USER")
+	if globalRunUser == "" {
+		globalRunUser = "root"
 	}
-	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s, TRIM_APPVER=%s, DSH_RUN_USER=%s)", pkgVar, appdest, globalAppVer, runUser)
+
+	globalDshHome = filepath.Join(globalPkgVar, "dsh-data")
+	globalHomeDir = filepath.Join(globalPkgVar, "home")
+	globalPnpmDir = filepath.Join(globalPkgVar, "pnpm-env")
+	globalPnpmHome = filepath.Join(globalPkgVar, "pnpm-home")
+	globalNpmCache = filepath.Join(globalPkgVar, "npm-cache")
+	globalPluginsDir = filepath.Join(globalPkgVar, "plugins")
+	globalSnapshotsDir = filepath.Join(globalPkgVar, "snapshots")
+	srcDir = filepath.Join(globalPkgVar, "src", "deepseek-harness")
+
+	InitLogger()
+	LogInfo("DeepSeek Harness 服务初始化启动 (DATA_LIBRARY_PATH=%s, TRIM_APPDEST=%s, TRIM_APPVER=%s, DSH_RUN_USER=%s)", globalPkgVar, globalAppDest, globalAppVer, globalRunUser)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -54,9 +72,9 @@ func main() {
 		os.Exit(0)
 	}()
 
-	InitConfig(pkgVar)
-	InitAppEnv(pkgVar)
-	InitHarness(pkgVar, appdest)
+	InitConfig()
+	InitAppEnv()
+	InitHarness()
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -67,8 +85,8 @@ func main() {
 	StartWorkspaceWatch()
 	StartAppUpdateChecker()
 
-	_ = os.MkdirAll(appdest, 0755)
-	socketPath := filepath.Join(appdest, "web.sock")
+	_ = os.MkdirAll(globalAppDest, 0755)
+	socketPath := filepath.Join(globalAppDest, "web.sock")
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)

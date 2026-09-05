@@ -31,6 +31,9 @@ var (
 
 	currentSnapshotProgress SnapshotProgress
 	currentSnapshotMu       sync.RWMutex
+
+	// snapshotArchiveTargets 定义快照打包与还原的目标数据清单
+	snapshotArchiveTargets = []string{"config.json", "src", "home", "dsh-data", "plugins"}
 )
 
 // SnapshotProgress 快照进度事件与状态
@@ -356,10 +359,6 @@ type SnapshotSummary struct {
 	CurrentTask    SnapshotProgress `json:"current_task"`
 }
 
-func snapshotsBaseDir() string {
-	return filepath.Join(globalPkgVar, "snapshots")
-}
-
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
@@ -368,7 +367,7 @@ func randHex(n int) string {
 
 // ListSnapshots 获取所有快照列表及统计
 func ListSnapshots() (SnapshotSummary, error) {
-	base := snapshotsBaseDir()
+	base := globalSnapshotsDir
 	_ = os.MkdirAll(base, 0755)
 
 	entries, err := os.ReadDir(base)
@@ -441,7 +440,7 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 	defer snapshotMu.Unlock()
 
 	// 检查已有快照名称，拦截重名
-	base := snapshotsBaseDir()
+	base := globalSnapshotsDir
 	if entries, err := os.ReadDir(base); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() || !validIDRegex.MatchString(entry.Name()) {
@@ -481,7 +480,7 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 	}
 
 	id := fmt.Sprintf("snap_%s_%s", time.Now().Format("20060102_150405"), randHex(3))
-	snapDir := filepath.Join(snapshotsBaseDir(), id)
+	snapDir := filepath.Join(globalSnapshotsDir, id)
 	if err := os.MkdirAll(snapDir, 0755); err != nil {
 		if wasRunning {
 			state.SetStatus(StatusStopped, "")
@@ -592,9 +591,9 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// archiveSnapshotData 将 src, home, dsh-data, config.json 全量打包至 tar.gz 并广播实际进度
+// archiveSnapshotData 将全量目标模块打包至 tar.gz 并广播实际进度
 func archiveSnapshotData(tarPath string, level int) error {
-	targets := []string{"config.json", "src", "home", "dsh-data"}
+	targets := snapshotArchiveTargets
 
 	setSnapshotProgress(SnapshotProgress{
 		Active:  true,
@@ -826,7 +825,7 @@ func RestoreSnapshot(id string) error {
 		return fmt.Errorf("非法快照 ID: %s", id)
 	}
 
-	snapDir := filepath.Join(snapshotsBaseDir(), id)
+	snapDir := filepath.Join(globalSnapshotsDir, id)
 	metaFile := filepath.Join(snapDir, "meta.json")
 	metaData, err := os.ReadFile(metaFile)
 	if err != nil {
@@ -881,7 +880,7 @@ func RestoreSnapshot(id string) error {
 	trashDir := filepath.Join(globalPkgVar, fmt.Sprintf("_trash_restore_%s", time.Now().Format("20060102_150405")))
 	_ = os.MkdirAll(trashDir, 0755)
 
-	targetDirs := []string{"config.json", "src", "home", "dsh-data"}
+	targetDirs := snapshotArchiveTargets
 	var movedDirs []string
 
 	setSnapshotProgress(SnapshotProgress{
@@ -944,8 +943,8 @@ func RestoreSnapshot(id string) error {
 	}(trashDir)
 
 	LogInfo("正在重新初始化应用环境与加载配置...")
-	InitConfig(globalPkgVar)
-	InitAppEnv(globalPkgVar)
+	InitConfig()
+	InitAppEnv()
 
 	setSnapshotProgress(SnapshotProgress{
 		Active:  true,
@@ -986,7 +985,7 @@ func DeleteSnapshot(id string) error {
 	snapshotMu.Lock()
 	defer snapshotMu.Unlock()
 
-	snapDir := filepath.Join(snapshotsBaseDir(), id)
+	snapDir := filepath.Join(globalSnapshotsDir, id)
 	if _, err := os.Stat(snapDir); err != nil {
 		return fmt.Errorf("快照不存在: %s", id)
 	}

@@ -360,7 +360,7 @@ func handleAction(c *gin.Context) {
 		case "rebuild":
 			Rebuild()
 		default:
-			tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
+			tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
 			if _, err := os.Stat(tarPath); err != nil {
 				Fail(c, http.StatusBadRequest, "未检测到内置离线安装包，无法执行恢复出厂设置")
 				return

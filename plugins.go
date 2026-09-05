@@ -234,7 +234,7 @@ func (c *pluginCommand) display() string {
 }
 
 func pluginProfileDir() string {
-	return filepath.Join(pkgVarDir, "dsh-data", "profiles", "web")
+	return filepath.Join(globalDshHome, "profiles", "web")
 }
 
 // pluginItem 前端呈现的元数据插件模型
@@ -328,7 +328,7 @@ type rawPackageMeta struct {
 func installedPluginMetadata(name string) (meta rawPackageMeta, found bool) {
 	candidates := []string{
 		filepath.Join(pluginProfileDir(), "node_modules", name, "package.json"),
-		filepath.Join(pkgVarDir, "dsh-data", "profiles", "node_modules", name, "package.json"),
+		filepath.Join(globalDshHome, "profiles", "node_modules", name, "package.json"),
 		filepath.Join(srcDir, "node_modules", name, "package.json"),
 	}
 	for _, p := range candidates {

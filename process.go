@@ -49,7 +49,7 @@ var (
 )
 
 func pidFilePath() string {
-	return filepath.Join(pkgVarDir, "harness.pid")
+	return filepath.Join(globalPkgVar, "harness.pid")
 }
 
 func removePidFileIfMatches(pid int) {

@@ -17,7 +17,7 @@ import (
 var npmNameStripRe = regexp.MustCompile(`^((?:@[a-z0-9-~][\w.-]*/)?[a-z0-9-~][\w.-]*)@.+$`)
 
 func profileDirFor(name string) string {
-	return filepath.Join(pkgVarDir, "dsh-data", "profiles", name)
+	return filepath.Join(globalDshHome, "profiles", name)
 }
 
 // normalizePluginKey 提取标准包名，去除 npm 版本号
@@ -280,8 +280,8 @@ func ResetAllProfilePatches() {
 	patchFileMu.Lock()
 	defer patchFileMu.Unlock()
 
-	_ = safeRemoveAll(filepath.Join(pkgVarDir, "dsh-data", "profiles"))
-	_ = safeRemoveAll(filepath.Join(pkgVarDir, "plugins"))
+	_ = safeRemoveAll(filepath.Join(globalDshHome, "profiles"))
+	_ = safeRemoveAll(globalPluginsDir)
 }
 
 var (
@@ -294,7 +294,7 @@ func profileWorkspaceYamlPathFor(name string) string {
 }
 
 func allowBuildsSidecarPath() string {
-	return filepath.Join(pkgVarDir, "plugins", "allowbuilds.json")
+	return filepath.Join(globalPluginsDir, "allowbuilds.json")
 }
 
 // parseBlockedPackages 从 pnpm 错误输出中提取被拦截构建脚本的包名

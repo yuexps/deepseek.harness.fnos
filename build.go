@@ -20,7 +20,7 @@ const (
 
 func nodeBin() string { return filepath.Join(nodeBinDir, "node") }
 func npmBin() string  { return filepath.Join(nodeBinDir, "npm") }
-func pnpmBin() string { return filepath.Join(pkgVarDir, "pnpm-env", "node_modules", ".bin", "pnpm") }
+func pnpmBin() string { return filepath.Join(globalPnpmDir, "node_modules", ".bin", "pnpm") }
 
 // CheckUpdateResult 检查更新返回结构
 type CheckUpdateResult struct {
@@ -179,7 +179,7 @@ func RepairEnvironment(keepPlugins bool) {
 }
 
 func repairEnvironment(keepPlugins bool) {
-	tarPath := filepath.Join(appDest, "deepseek-harness.tar.gz")
+	tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
 	if _, err := os.Stat(tarPath); err != nil {
 		LogWarning("未检测到内置离线包，无法执行恢复出厂设置: %s", tarPath)
 		state.SetStatus(StatusStopped, "未检测到内置离线包，无法恢复出厂设置")
@@ -352,7 +352,7 @@ func installPnpm() error {
 	if _, err := os.Stat(pnpmBin()); err == nil {
 		return nil
 	}
-	pnpmDir := filepath.Join(pkgVarDir, "pnpm-env")
+	pnpmDir := globalPnpmDir
 	_ = os.MkdirAll(pnpmDir, 0755)
 	return runCmd(pnpmDir, npmBin(), "install", "pnpm", "--registry="+GetConfig().GetNpmRegistry())
 }
@@ -485,7 +485,7 @@ func refreshCommit() {
 	if commit == "" {
 		if data, err := os.ReadFile(filepath.Join(srcDir, ".commit")); err == nil {
 			commit = strings.TrimSpace(string(data))
-		} else if data, err := os.ReadFile(filepath.Join(appDest, ".commit")); err == nil {
+		} else if data, err := os.ReadFile(filepath.Join(globalAppDest, ".commit")); err == nil {
 			commit = strings.TrimSpace(string(data))
 		}
 	}
@@ -511,7 +511,7 @@ func readVersion() string {
 }
 
 func readAppDestVersion() string {
-	data, err := os.ReadFile(filepath.Join(appDest, ".version"))
+	data, err := os.ReadFile(filepath.Join(globalAppDest, ".version"))
 	if err != nil {
 		return ""
 	}

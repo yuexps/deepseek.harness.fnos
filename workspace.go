@@ -96,11 +96,6 @@ func notifyWorkspace() {
 	}
 }
 
-// workspaceFilePath dsh 持久化的工作区存储（$DSH_HOME/storages/workspace.json）
-func workspaceFilePath() string {
-	return filepath.Join(pkgVarDir, "dsh-data", "storages", "workspace.json")
-}
-
 // workspaceFile 对应 dsh workspace domain 的持久化结构（unit.version=2）
 type workspaceFile struct {
 	Unit struct {
@@ -186,13 +181,24 @@ func convertWorkspaceFile(data []byte) (WorkspaceValue, error) {
 	return val, nil
 }
 
-// fetchWorkspaces 读取 workspace.json（不依赖服务运行），失败保留上次数据
+// fetchWorkspaces 读取 workspace.json 并同步工作区状态
 func fetchWorkspaces() error {
-	path := workspaceFilePath()
+	path := filepath.Join(globalDshHome, "storages", "workspace.json")
 	st, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// dsh 尚未初始化工作区存储：保持现状
+			// 文件不存在表示工作区为空：清空内存并通知订阅者
+			workspaceMu.Lock()
+			hasOld := len(workspaceValue.Items) > 0 || len(workspaceValue.ArchivedSessionIDs) > 0
+			workspaceValue = WorkspaceValue{
+				Items:              []WorkspaceItem{},
+				ArchivedSessionIDs: []string{},
+			}
+			lastWorkspaceMod = time.Time{}
+			workspaceMu.Unlock()
+			if hasOld {
+				notifyWorkspace()
+			}
 			return nil
 		}
 		return err

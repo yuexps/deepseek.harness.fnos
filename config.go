@@ -68,15 +68,15 @@ var (
 	configFilePath string
 )
 
-func InitConfig(pkgVar string) {
-	configFilePath = filepath.Join(pkgVar, "config.json")
+func InitConfig() {
+	configFilePath = filepath.Join(globalPkgVar, "config.json")
 	defaultSkillEnabled := true
 	defaultProxyDsh := false
 	globalConfig = Config{
 		ServerPort:         2298,
 		ProxyPort:          2299,
 		AccessMode:         "fngateway",
-		DataLibraryPath:    pkgVar,
+		DataLibraryPath:    globalPkgVar,
 		EnableBuiltinSkill: &defaultSkillEnabled,
 		ProxyDshRuntime:    &defaultProxyDsh,
 		NpmRegistry:        DefaultNpmRegistry,
@@ -102,46 +102,40 @@ func InitConfig(pkgVar string) {
 			globalConfig.AccessMode = "fngateway"
 		}
 	}
-	globalConfig.DataLibraryPath = pkgVar
+	globalConfig.DataLibraryPath = globalPkgVar
 }
 
 // InitAppEnv 初始化全局环境变量供子进程继承
-func InitAppEnv(pkgVar string) {
-	pnpmBinDir := filepath.Join(pkgVar, "pnpm-env", "node_modules", ".bin")
+func InitAppEnv() {
+	pnpmBinDir := filepath.Join(globalPnpmDir, "node_modules", ".bin")
 	_ = os.Setenv("PATH", pnpmBinDir+":"+nodeBinDir+":/bin:/usr/bin:"+os.Getenv("PATH"))
-	homeDir := filepath.Join(pkgVar, "home")
-	_ = os.MkdirAll(homeDir, 0755)
-	_ = os.Setenv("HOME", homeDir)
+	_ = os.MkdirAll(globalHomeDir, 0755)
+	_ = os.Setenv("HOME", globalHomeDir)
 	_ = os.Setenv("CI", "true")
 
-	pnpmHome := filepath.Join(pkgVar, "pnpm-home")
-	storeDir := filepath.Join(pnpmHome, "store")
-	_ = os.Setenv("PNPM_HOME", pnpmHome)
+	storeDir := filepath.Join(globalPnpmHome, "store")
+	_ = os.Setenv("PNPM_HOME", globalPnpmHome)
 	_ = os.Setenv("pnpm_config_store_dir", storeDir)
-	_ = os.Setenv("npm_config_cache", filepath.Join(pkgVar, "npm-cache"))
+	_ = os.Setenv("npm_config_cache", globalNpmCache)
 
-	ApplyNpmRegistryEnv(pkgVar)
+	ApplyNpmRegistryEnv()
 
-	dshHome := filepath.Join(pkgVar, "dsh-data")
-	_ = os.Setenv("DSH_HOME", dshHome)
-	_ = os.Setenv("DSH_AGENTS_HOME", filepath.Join(dshHome, "agents"))
+	_ = os.Setenv("DSH_HOME", globalDshHome)
+	_ = os.Setenv("DSH_AGENTS_HOME", filepath.Join(globalDshHome, "agents"))
 
 	ApplyProxyEnv()
 }
 
 // ApplyNpmRegistryEnv 根据当前配置应用 NPM 依赖源环境变量并同步 .npmrc
-func ApplyNpmRegistryEnv(pkgVar string) {
-	if pkgVar == "" {
-		pkgVar = globalPkgVar
-	}
+func ApplyNpmRegistryEnv() {
 	registry := GetConfig().GetNpmRegistry()
 	_ = os.Setenv("npm_config_registry", registry)
 	_ = os.Setenv("NPM_CONFIG_REGISTRY", registry)
 	_ = os.Setenv("pnpm_config_registry", registry)
 	_ = os.Setenv("PNPM_CONFIG_REGISTRY", registry)
 
-	if pkgVar != "" {
-		homeNpmrc := filepath.Join(pkgVar, "home", ".npmrc")
+	if globalHomeDir != "" {
+		homeNpmrc := filepath.Join(globalHomeDir, ".npmrc")
 		_ = os.MkdirAll(filepath.Dir(homeNpmrc), 0755)
 		_ = os.WriteFile(homeNpmrc, []byte("registry="+registry+"\n"), 0644)
 	}
@@ -274,21 +268,14 @@ func SaveConfig(cfg Config) error {
 		return err
 	}
 	ApplyProxyEnv()
-	ApplyNpmRegistryEnv(globalPkgVar)
-	ApplyBuiltinSkillConfig(globalPkgVar, appDest)
+	ApplyNpmRegistryEnv()
+	ApplyBuiltinSkillConfig()
 	return nil
 }
 
 // ApplyBuiltinSkillConfig 同步或切换内置飞牛官方 TRIM CLI 技能文件
-func ApplyBuiltinSkillConfig(pkgVar, appdest string) {
-	if pkgVar == "" {
-		pkgVar = globalPkgVar
-	}
-	if appdest == "" {
-		appdest = os.Getenv("TRIM_APPDEST")
-	}
-
-	skillSrc := filepath.Join(appdest, "bin", "skill")
+func ApplyBuiltinSkillConfig() {
+	skillSrc := filepath.Join(globalAppDest, "bin", "skill")
 	if _, err := os.Stat(skillSrc); err != nil {
 		skillSrc = "fnpack/app/bin/skill"
 	}
@@ -302,7 +289,7 @@ func ApplyBuiltinSkillConfig(pkgVar, appdest string) {
 		enabled = *cfg.EnableBuiltinSkill
 	}
 
-	skillsDir := filepath.Join(pkgVar, "dsh-data", "skills")
+	skillsDir := filepath.Join(globalDshHome, "skills")
 	targetSkill := filepath.Join(skillsDir, "trim-cli")
 
 	if !enabled {
