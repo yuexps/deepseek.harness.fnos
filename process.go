@@ -103,13 +103,9 @@ func killProcessTree(pid int) {
 		return
 	}
 	// 查询该进程所属的 PGID 尝试整组清理
-	out, err := exec.Command("ps", "-o", "pgid=", "-p", strconv.Itoa(pid)).Output()
-	if err == nil {
-		pgidStr := strings.TrimSpace(string(out))
-		if pgid, err := strconv.Atoi(pgidStr); err == nil && pgid > 0 {
-			if killProcessGroup(pgid) {
-				return
-			}
+	if pgid, err := syscall.Getpgid(pid); err == nil && pgid > 0 {
+		if killProcessGroup(pgid) {
+			return
 		}
 	}
 	killProcess(pid)
@@ -148,22 +144,12 @@ func isDshProcess(pid int) bool {
 	return false
 }
 
-// findDshPidsOnPort 获取指定端口上的 DSH 进程 PID 列表
-func findDshPidsOnPort(port int) []int {
-	var dshPids []int
-	for _, pid := range findPidsOnPort(port) {
-		if isProcessAlive(pid) && isDshProcess(pid) {
-			dshPids = append(dshPids, pid)
-		}
-	}
-	return dshPids
-}
-
 // findDshPidOnPort 获取指定端口上的首个 DSH 进程 PID
 func findDshPidOnPort(port int) int {
-	pids := findDshPidsOnPort(port)
-	if len(pids) > 0 {
-		return pids[0]
+	for _, pid := range findPidsOnPort(port) {
+		if isProcessAlive(pid) && isDshProcess(pid) {
+			return pid
+		}
 	}
 	return 0
 }
@@ -322,11 +308,14 @@ func inspectAndHeal() {
 	}
 
 	if curStatus == StatusStopped {
-		// 停止状态下：仅清理失效的 PID 残留文件
-		if data, err := os.ReadFile(pidFilePath()); err == nil {
-			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
-				if !isProcessAlive(pid) {
-					_ = os.Remove(pidFilePath())
+		// 停止状态下：仅在存在残留 PID 文件且进程已死时清理一次，避免持续产生读 I/O
+		pidPath := pidFilePath()
+		if _, err := os.Stat(pidPath); err == nil {
+			if data, err := os.ReadFile(pidPath); err == nil {
+				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 0 {
+					if !isProcessAlive(pid) {
+						_ = os.Remove(pidPath)
+					}
 				}
 			}
 		}
@@ -427,6 +416,20 @@ func broadcastUsageIfChanged(stats UsageStats) {
 	}
 }
 
+// getTargetDshPid 获取当前需要监控的 DSH 主进程 PID（支持托管及外部过户接管）
+func getTargetDshPid() int {
+	port := GetConfig().GetServerPort()
+	if pid := GetActiveDshPid(port); pid > 0 {
+		return pid
+	}
+	procMu.Lock()
+	defer procMu.Unlock()
+	if process != nil {
+		return process.Pid()
+	}
+	return 0
+}
+
 // StartUsageSampler 启动系统指标智能单例采集协程
 func StartUsageSampler() {
 	go func() {
@@ -434,12 +437,16 @@ func StartUsageSampler() {
 		sampleDshUsageOnce()
 
 		for {
-			interval := 5 * time.Second
-			if hasUsageSubscribers() {
-				interval = 1 * time.Second
+			// 无订阅者时彻底挂起休眠，0 CPU 唤醒
+			if !hasUsageSubscribers() {
+				<-wakeUsageCh
+				// 首个订阅者连入唤醒时立即推送首帧，并在 200ms 后平滑校准 CPU
+				sampleDshUsageOnce()
+				time.Sleep(200 * time.Millisecond)
+				sampleDshUsageOnce()
 			}
 
-			timer := time.NewTimer(interval)
+			timer := time.NewTimer(1 * time.Second)
 			select {
 			case <-timer.C:
 				sampleDshUsageOnce()
@@ -458,15 +465,21 @@ func StartUsageSampler() {
 
 func sampleDshUsageOnce() {
 	if runtime.GOOS != "linux" {
-		usageCacheMu.Lock()
-		cachedCpu = "-"
-		cachedMem = "-"
-		usageCacheMu.Unlock()
-		broadcastUsageIfChanged(UsageStats{Cpu: "-", Memory: "-"})
+		updateAndBroadcastUsage("-", "-")
 		return
 	}
 
-	cpuStr, memStr := calculateDshUsage(os.Getpid())
+	targetPid := getTargetDshPid()
+	if targetPid <= 0 {
+		updateAndBroadcastUsage("-", "-")
+		return
+	}
+
+	cpuStr, memStr := calculateDshUsage(targetPid)
+	updateAndBroadcastUsage(cpuStr, memStr)
+}
+
+func updateAndBroadcastUsage(cpuStr, memStr string) {
 	usageCacheMu.Lock()
 	cachedCpu = cpuStr
 	cachedMem = memStr
@@ -517,27 +530,46 @@ func readSystemTotalJiffies() uint64 {
 	return 0
 }
 
-// parseProcStat 解析 /proc/[pid]/stat，提取 ppid, pgrp 以及 CPU ticks (utime + stime)
-func parseProcStat(pid int) (ppid, pgrp int, ticks uint64, ok bool) {
+// readProcTicks 读取单进程 CPU ticks (utime + stime)
+func readProcTicks(pid int) (uint64, bool) {
 	statData, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, false
 	}
 	content := string(statData)
 	idx := strings.LastIndex(content, ")")
 	if idx == -1 || idx+2 >= len(content) {
-		return 0, 0, 0, false
+		return 0, false
 	}
 	fields := strings.Fields(content[idx+2:])
 	if len(fields) < 13 {
-		return 0, 0, 0, false
+		return 0, false
 	}
 
-	ppid, _ = strconv.Atoi(fields[1])
-	pgrp, _ = strconv.Atoi(fields[2])
 	utime, _ := strconv.ParseUint(fields[11], 10, 64)
 	stime, _ := strconv.ParseUint(fields[12], 10, 64)
-	return ppid, pgrp, utime + stime, true
+	return utime + stime, true
+}
+
+// getFamilyPids 收集 rootPid 及其所有派生子孙进程 PID
+func getFamilyPids(rootPid int) []int {
+	if rootPid <= 0 {
+		return nil
+	}
+	pids := []int{rootPid}
+
+	childrenPath := fmt.Sprintf("/proc/%d/task/%d/children", rootPid, rootPid)
+	data, err := os.ReadFile(childrenPath)
+	if err != nil {
+		return pids
+	}
+
+	for _, field := range strings.Fields(string(data)) {
+		if childPid, err := strconv.Atoi(field); err == nil && childPid > 0 {
+			pids = append(pids, getFamilyPids(childPid)...)
+		}
+	}
+	return pids
 }
 
 // getDshTreeStats 聚合 主PID 及其所有派生子孙进程的 CPU 时间与常驻内存 (KB)
@@ -546,71 +578,12 @@ func getDshTreeStats(mainPid int) (totalTicks uint64, totalRssKb uint64) {
 		return 0, 0
 	}
 
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		_, _, ticks, _ := parseProcStat(mainPid)
-		return ticks, readProcRssKb(mainPid)
-	}
-
-	type procItem struct {
-		ppid  int
-		ticks uint64
-		rss   uint64
-	}
-
-	procMap := make(map[int]procItem, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	familyPids := getFamilyPids(mainPid)
+	for _, pid := range familyPids {
+		if ticks, ok := readProcTicks(pid); ok {
+			totalTicks += ticks
 		}
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 {
-			continue
-		}
-		ppid, _, ticks, ok := parseProcStat(pid)
-		if !ok {
-			continue
-		}
-		procMap[pid] = procItem{
-			ppid:  ppid,
-			ticks: ticks,
-			rss:   readProcRssKb(pid),
-		}
-	}
-
-	isFamily := make(map[int]bool, len(procMap))
-	isFamily[mainPid] = true
-
-	var checkFamily func(pid int, visited map[int]bool) bool
-	checkFamily = func(pid int, visited map[int]bool) bool {
-		if pid <= 0 {
-			return false
-		}
-		if res, exists := isFamily[pid]; exists {
-			return res
-		}
-		if visited[pid] {
-			return false
-		}
-		visited[pid] = true
-
-		item, exists := procMap[pid]
-		if !exists {
-			return false
-		}
-		if checkFamily(item.ppid, visited) {
-			isFamily[pid] = true
-			return true
-		}
-		isFamily[pid] = false
-		return false
-	}
-
-	for pid, item := range procMap {
-		if checkFamily(pid, make(map[int]bool)) {
-			totalTicks += item.ticks
-			totalRssKb += item.rss
-		}
+		totalRssKb += readProcRssKb(pid)
 	}
 
 	return totalTicks, totalRssKb
@@ -643,8 +616,8 @@ func calculateDshUsage(pid int) (string, string) {
 	usageSampleMu.Lock()
 	defer usageSampleMu.Unlock()
 
-	// 进程重启、时钟回跳或子进程退出导致 ticks 减少时重置样本，防止无符号下溢
-	if lastSamplePid != pid || procTicks < lastSample.ticks || sysTotal <= lastSample.total {
+	// 进程重启、时钟回跳或休眠过久导致跨度失真时重置样本，防止异常突刺
+	if lastSamplePid != pid || procTicks < lastSample.ticks || sysTotal <= lastSample.total || time.Since(lastSampleAt) > 3*time.Second {
 		lastSamplePid = pid
 		lastSample = procSample{ticks: procTicks, total: sysTotal}
 		lastSampleAt = time.Now()

@@ -528,6 +528,14 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 		return nil, fmt.Errorf("快照打包失败: %w", err)
 	}
 
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "create",
+		Percent: 95,
+		Stage:   "正在保存元数据与恢复服务",
+		Message: "写入快照描述并自启服务",
+	})
+
 	fi, err := os.Stat(tarPath)
 	if err == nil {
 		meta.SizeBytes = fi.Size()
@@ -544,6 +552,14 @@ func CreateSnapshot(params CreateSnapshotParams) (*SnapshotMeta, error) {
 			LogWarning("快照创建后服务自启失败: %s", err)
 		}
 	}
+
+	setSnapshotProgress(SnapshotProgress{
+		Active:  true,
+		Action:  "create",
+		Percent: 100,
+		Stage:   "快照创建完成",
+		Message: fmt.Sprintf("快照已就绪 (%s)", formatBytes(uint64(meta.SizeBytes))),
+	})
 
 	LogInfo("快照 [%s] 创建成功 (归档文件大小: %s, 总耗时: %s)", id, formatBytes(uint64(meta.SizeBytes)), time.Since(snapStart).Round(time.Millisecond))
 	notifySnapshot()
@@ -635,9 +651,10 @@ func archiveSnapshotData(tarPath string, level int) error {
 
 	reportProgress := func(written int64) {
 		processedBytes += written
-		pct := int(float64(processedBytes) * 100 / float64(totalBytes))
-		if pct > 99 {
-			pct = 99
+		// 压缩流占整个快照生命周期的 5% ~ 90%
+		pct := 5 + int(float64(processedBytes)*85/float64(totalBytes))
+		if pct > 90 {
+			pct = 90
 		}
 		now := time.Now()
 		if pct != lastReportPct && now.Sub(lastReportTime) >= 120*time.Millisecond {
@@ -652,7 +669,7 @@ func archiveSnapshotData(tarPath string, level int) error {
 			})
 		}
 		// 关键进度里程碑输出日志
-		if pct >= lastMilestonePct+25 && pct < 100 {
+		if pct >= lastMilestonePct+25 && pct < 90 {
 			lastMilestonePct = (pct / 25) * 25
 			LogInfo("快照打包压缩中: 进度 %d%% (已读取 %s / %s，已写入压缩包 %s)", pct, formatBytes(uint64(processedBytes)), formatBytes(uint64(totalBytes)), formatBytes(uint64(compressedBytes)))
 		}
@@ -714,8 +731,8 @@ func archiveSnapshotData(tarPath string, level int) error {
 	setSnapshotProgress(SnapshotProgress{
 		Active:  true,
 		Action:  "create",
-		Percent: 100,
-		Stage:   "快照压缩完成",
+		Percent: 90,
+		Stage:   "压缩归档完成",
 		Message: fmt.Sprintf("原始 %s → 压缩后 %s", formatBytes(uint64(totalBytes)), formatBytes(uint64(compressedBytes))),
 	})
 

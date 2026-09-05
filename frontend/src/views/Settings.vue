@@ -517,7 +517,7 @@ function handleReset() {
 
 // 重置运行环境确认弹窗
 function handleRepairEnvironment() {
-  const keepPlugins = ref(false)
+  const cleanPlugins = ref(true)
   dialog.warning({
     title: '确认重置运行环境？',
     content: () =>
@@ -534,18 +534,18 @@ function handleRepairEnvironment() {
           },
           [
             h('div', { class: 'flex flex-col gap-0.5' }, [
-              h('span', { class: 'font-medium text-slate-700 dark:text-slate-200' }, '保留已安装的第三方插件'),
+              h('span', { class: 'font-medium text-slate-700 dark:text-slate-200' }, '清理已安装的第三方插件'),
               h(
                 'span',
                 { class: 'text-[11px] text-slate-400 dark:text-slate-500' },
-                '若因插件导致服务异常请保持关闭'
+                '建议开启以避免插件冲突并恢复纯净环境；如需保留请关闭'
               )
             ]),
             h(NSwitch, {
-              value: keepPlugins.value,
+              value: cleanPlugins.value,
               size: 'small',
               'onUpdate:value': (val: boolean) => {
-                keepPlugins.value = val
+                cleanPlugins.value = val
               }
             })
           ]
@@ -554,7 +554,7 @@ function handleRepairEnvironment() {
     positiveText: '确认重置',
     negativeText: '取消',
     onPositiveClick: async () => {
-      const res = await systemStore.sendAction('repair', { keep_plugins: keepPlugins.value })
+      const res = await systemStore.sendAction('repair', { keep_plugins: !cleanPlugins.value })
       if (res.success) {
         message.success(res.message || '已开始重置运行环境…')
       } else {

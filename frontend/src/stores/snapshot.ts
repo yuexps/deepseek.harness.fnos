@@ -72,7 +72,7 @@ export const useSnapshotStore = defineStore('snapshot', () => {
           progressVisible.value = false
           actionLoading.value = false
           hideTimer = null
-        }, 1500)
+        }, 1000)
       }
     }
   }

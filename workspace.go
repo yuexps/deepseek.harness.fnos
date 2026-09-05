@@ -35,6 +35,7 @@ var (
 	workspaceMu     sync.RWMutex
 	workspaceSubs   = make(map[chan struct{}]struct{})
 	workspaceSubsMu sync.Mutex
+	wakeWorkspaceCh = make(chan struct{}, 1)
 	// lastWorkspaceMod 上次成功解析的文件修改时间，用于跳过未变化的重复解析
 	lastWorkspaceMod time.Time
 )
@@ -52,11 +53,27 @@ func GetWorkspaces() WorkspaceValue {
 	return v
 }
 
-func SubscribeWorkspace(buf int) (<-chan struct{}, func()) {
+func hasWorkspaceSubscribers() bool {
 	workspaceSubsMu.Lock()
 	defer workspaceSubsMu.Unlock()
+	return len(workspaceSubs) > 0
+}
+
+func SubscribeWorkspace(buf int) (<-chan struct{}, func()) {
+	workspaceSubsMu.Lock()
+	wasEmpty := len(workspaceSubs) == 0
 	ch := make(chan struct{}, buf)
 	workspaceSubs[ch] = struct{}{}
+	workspaceSubsMu.Unlock()
+
+	// 首个订阅者接入时立即唤醒检查
+	if wasEmpty {
+		select {
+		case wakeWorkspaceCh <- struct{}{}:
+		default:
+		}
+	}
+
 	return ch, func() {
 		workspaceSubsMu.Lock()
 		delete(workspaceSubs, ch)
@@ -200,27 +217,59 @@ func fetchWorkspaces() error {
 	return nil
 }
 
-// StartWorkspaceWatch 每秒检查 workspace.json mtime，变化即解析并通过 WebSocket 推送
+// StartWorkspaceWatch 订阅驱动监听工作区文件变化：无订阅时彻底挂起，有订阅时 2s 低频比对
 func StartWorkspaceWatch() {
 	go func() {
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
 		var lastErr string
-		for range ticker.C {
-			if err := fetchWorkspaces(); err != nil {
-				// 持续错误只记录一次，避免每秒刷屏
-				if msg := err.Error(); msg != lastErr {
-					LogWarning("工作区数据同步失败: %s", msg)
-					lastErr = msg
-				}
-				continue
+		for {
+			if !hasWorkspaceSubscribers() {
+				// 无订阅者时彻底挂起，不产生磁盘 I/O
+				<-wakeWorkspaceCh
 			}
-			lastErr = ""
+
+			timer := time.NewTimer(2 * time.Second)
+			select {
+			case <-timer.C:
+				if err := fetchWorkspaces(); err != nil {
+					if msg := err.Error(); msg != lastErr {
+						LogWarning("工作区数据同步失败: %s", msg)
+						lastErr = msg
+					}
+					continue
+				}
+				lastErr = ""
+			case <-wakeWorkspaceCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				if err := fetchWorkspaces(); err != nil {
+					if msg := err.Error(); msg != lastErr {
+						LogWarning("工作区数据同步失败: %s", msg)
+						lastErr = msg
+					}
+					continue
+				}
+				lastErr = ""
+			}
 		}
 	}()
 }
 
 func handleGetWorkspaces(c *gin.Context) {
+	cached := GetWorkspaces()
+	// 已有内存缓存时秒级响应，后台异步脏检查
+	if len(cached.Items) > 0 {
+		OK(c, cached)
+		go func() {
+			_ = fetchWorkspaces()
+		}()
+		return
+	}
+
+	// 首次冷启动无缓存时同步解析一次
 	if err := fetchWorkspaces(); err != nil {
 		Fail(c, http.StatusInternalServerError, "读取工作区失败: "+err.Error())
 		return

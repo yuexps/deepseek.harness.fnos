@@ -177,7 +177,8 @@ jobs:
             --config.confirmModulesPurge=false \
             --config.dangerouslyAllowAllBuilds=true \
             --config.minimumReleaseAge=0 \
-            --config.strictDepBuilds=false
+            --config.strictDepBuilds=false \
+            --config.allow-unused-patches=true
           
           node packages/subprocess/subprocess-local/scripts/ensure-spawn-helper.mjs || true
           
@@ -346,7 +347,8 @@ jobs:
             --config.confirmModulesPurge=false \
             --config.dangerouslyAllowAllBuilds=true \
             --config.minimumReleaseAge=0 \
-            --config.strictDepBuilds=false
+            --config.strictDepBuilds=false \
+            --config.allow-unused-patches=true
           
           node packages/subprocess/subprocess-local/scripts/ensure-spawn-helper.mjs || true
           
