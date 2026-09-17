@@ -25,7 +25,7 @@
 | **4** | 反代下「插件配置」面板空白、模型设置无法读取保存 | DSH 客户端 `@deepseek-ai/dsh-client-connection` 依 `location.hostname` 判定 `isLoopback`；非 127.0.0.1 时将配置模式置为 `'memory'` 并拒绝向后端拉取数据 | **双重安全防护机制**：<br>1. 注入 `window.__DSH_TRANSPORT__ = { ownsHost: true }` 走通上游原生特权分支；<br>2. Hook `window.__ModuleLoader__`，在注册 `connection` 服务时劫持 `handle.isLoopback = true`（保持 JS 产物 100% 原始纯净，不进行暴力文本替换） | `proxy.go`<br>`fngateway.go` |
 | **5** | 远程 Web 访问时右上角显示红字“无法打开配置文件” | 官方设计中该按钮会调用桌面 GUI 编辑器（如 `xdg-open`），在 Linux 无头 NAS 服务器上无法执行 | 注入 `<style>[data-slot="settings.action"] { display: none !important; }</style>`，隐藏无头环境下无意义的桌面级操作 | `proxy.go`<br>`fngateway.go` |
 | **6** | 会话头部出现“在 Zed 中打开工作目录”等无效分体按钮 | DSH 上游新增 `open-in-app` 桌面级功能；因后台守护进程无 SSH 标记，DSH 误判为本地个人电脑并探测本地应用渲染了启动按钮 | 在全局环境初始化 `InitAppEnv()` 时注入 `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 22`，触发 DSH 原生远程无头环境模式，应用列表自动置空并隐藏该按钮 | `config.go` |
-| **7** | 反代端口打开报 **ERR_TOO_MANY_REDIRECTS** | 浏览器存有历史失效的 `dsh-auth-` Cookie，反代无条件拦截 401 触发 303 重定向，形成自身循环重定向 | 1. 显式固定反代发往后端的 `Host` 标头为回环目标，确保 authority 计算恒定；<br>2. 增加防环换票熔断机制（`_dsh_exch`），5秒内仅允许触发一次重定向，彻底掐断死循环；<br>3. 触发 303 时在响应头中强制清除失效 `dsh-auth-` Cookie（兼容 HTTPS 双标头）；<br>4. 规范化上游 `Location` 重定向标头，剥离内部回环地址防止协议与主机漂移 | `proxy.go`<br>`fngateway.go` |
+| **7** | 飞牛安卓 App 提示鉴权失败或报 `HTML did not preload client.js` | 1. 官方 Cookie 为 `SameSite=Strict`，移动端 WebView 无法留存凭据导致后续 401，原反代无条件拦截 401 易形成循环重定向；<br>2. 官方 HTML 缺少缓存头导致 WebView 强缓存旧 `rev` 触发 404；<br>3. 移动端网络栈对 `/plugins/??` 连续问号的折叠引发上游精确路由失配 | **会话服务端代持与启动契约全链路兜底**：<br>1. **会话代持**：反代捕获令牌，服务端内存统一向回环换票持有 `dsh-auth-*`，转发自动注入并剥离客户端 Cookie（彻底解耦对客户端凭据的依赖，遇 401 仅失效服务端缓存，移除客户端拦截重定向以杜绝死循环）；<br>2. **禁止强缓存**：HTML 响应强制注入 `Cache-Control: no-store, no-cache, must-revalidate`，杜绝旧启动契约被复用；<br>3. **问号容错还原**：发往上游前自动检测并补齐被中间层折叠丢失的 `/plugins/??` 首个问号，100% 保持官方原版路由契约成立 | `harness.go`<br>`proxy.go`<br>`fngateway.go` |
 
 ---
 
@@ -151,6 +151,12 @@ _ = os.Setenv("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22")
   1. `@deepseek-ai/dsh-host-open-in-app` 检测到 SSH 远程标记后，探测结果返回空映射 `new Map()`，前端 `@deepseek-ai/dsh-client-ui-open-in-app` 自动销毁分体胶囊按钮，不占用任何 DOM；
   2. 自动切换目录选择器为适用于远程 Web 的 `browse` 模式，杜绝在无头 Linux 上调用 `zenity`/`kdialog` 导致异常；
   3. 彻底禁用后台进程在无头服务器上尝试打开本地浏览器的行为。
+
+### 6. 服务端会话代持与模块加载契约对齐
+针对移动端 WebView 环境凭据隔离与请求折叠问题：
+- **服务端内存代持会话**：反代层捕获启动令牌，由 Go 守护进程在内存中统一向本地换取官方 `dsh-auth-*` 会话凭据并注入转发请求，彻底解耦对客户端 Cookie 的依赖；遇 401 仅失效内存缓存，移除客户端拦截重定向以杜绝循环重定向；
+- **禁用 HTML 强缓存**：拦截 HTML 响应并注入 `Cache-Control: no-store, no-cache, must-revalidate`，防止 WebView 缓存旧版 `rev` 静态资源契约导致 404；
+- **问号容错还原**：反代在转发 `/plugins/??` 批量加载请求前，自动检测并还原被网络栈折叠的首个问号，确保上游原生模块加载契约成立。
 
 ---
 

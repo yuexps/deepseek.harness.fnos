@@ -35,7 +35,6 @@ const (
 	authLoginPath       = "/_harness_auth"
 	authMaxAttempts     = 3
 	authLockoutDuration = 1 * time.Hour
-	dshExchangeCookie   = "_dsh_exch"
 )
 
 type clientAuthStatus struct {
@@ -353,60 +352,20 @@ func startReverseProxyLocked() error {
 			// 禁用压缩以便代理层注入 Polyfill
 			pr.Out.Header.Set("Accept-Encoding", "identity")
 
-			// 若访问根路径且未携带官方会话 Cookie，自动注入 Launch Token 换取会话
-			p := pr.Out.URL.Path
-			if (p == "" || p == "/" || p == "/index.html") && !hasDshAuthCookie(pr.In.Header.Get("Cookie")) {
-				if token := GetCurrentLaunchToken(); token != "" && !pr.Out.URL.Query().Has("token") {
-					q := pr.Out.URL.Query()
-					q.Set("token", token)
-					pr.Out.URL.RawQuery = q.Encode()
-				}
+			// 注入服务端代持凭据，解耦对客户端 Cookie 的依赖
+			if session := GetDshSessionCookie(); session != "" {
+				pr.Out.Header.Set("Cookie", appendDshSessionCookie(pr.In.Header.Get("Cookie"), session))
+			}
+
+			// 还原被折叠的 /plugins/?? 多路复用请求
+			if pr.Out.URL.Path == "/plugins/" && !strings.HasPrefix(pr.Out.URL.RawQuery, "?") && strings.Contains(pr.Out.URL.RawQuery, "client.js") {
+				pr.Out.URL.RawQuery = "?" + pr.Out.URL.RawQuery
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {
-			// 拦截 401 鉴权失败，若具备新 Token 则自动重定向刷新换票
+			// 上游鉴权失败时失效服务端代持凭据
 			if resp.StatusCode == http.StatusUnauthorized {
-				if token := GetCurrentLaunchToken(); token != "" {
-					bodyBytes, err := io.ReadAll(resp.Body)
-					_ = resp.Body.Close()
-					if err == nil && strings.Contains(string(bodyBytes), "dsh web authentication required") {
-						// 防环检查：若当前请求已携带该 Token，或短时间内已尝试过换票，禁止再次重定向以彻底阻断死循环
-						hasSameToken := resp.Request != nil && resp.Request.URL != nil && resp.Request.URL.Query().Get("token") == token
-						hasExchCookie := false
-						if resp.Request != nil {
-							if reqCookie := resp.Request.Header.Get("Cookie"); reqCookie != "" {
-								for _, part := range strings.Split(reqCookie, ";") {
-									if strings.TrimSpace(part) == dshExchangeCookie+"=1" {
-										hasExchCookie = true
-										break
-									}
-								}
-							}
-						}
-						if !hasSameToken && !hasExchCookie {
-							resp.StatusCode = http.StatusSeeOther
-							resp.Header.Set("Location", fmt.Sprintf("/?token=%s", url.QueryEscape(token)))
-							resp.Header.Set("Cache-Control", "no-store")
-							resp.Header.Del("Content-Length")
-							// 标记本次已触发换票重定向，5 秒内禁止再次自动发起重定向换票
-							resp.Header.Add("Set-Cookie", fmt.Sprintf("%s=1; Path=/; Max-Age=5; HttpOnly; SameSite=Lax", dshExchangeCookie))
-							// 清理客户端携带的失效官方 Cookie，避免重定向后持续冲突
-							if resp.Request != nil {
-								if reqCookie := resp.Request.Header.Get("Cookie"); reqCookie != "" {
-									clearDshAuthCookies(resp.Header, reqCookie, "/")
-								}
-							}
-							resp.Body = io.NopCloser(bytes.NewReader(nil))
-							resp.ContentLength = 0
-							return nil
-						}
-						// 若已发生过换票重定向依然 401，清理换票标记并放行错误，彻底防止死循环
-						if hasExchCookie {
-							resp.Header.Add("Set-Cookie", fmt.Sprintf("%s=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax", dshExchangeCookie))
-						}
-					}
-					resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				}
+				InvalidateDshSession()
 			}
 
 			// 改写上游重定向地址，去除回环主机头防止协议漂移
@@ -430,7 +389,7 @@ func startReverseProxyLocked() error {
 				return nil
 			}
 
-			// 拦截 HTML 注入 Polyfill 修复非安全上下文环境
+			// 拦截 HTML 注入 Polyfill 并禁用强缓存
 			if strings.Contains(contentType, "text/html") && resp.Body != nil {
 				bodyBytes, err := io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
@@ -442,6 +401,7 @@ func startReverseProxyLocked() error {
 				resp.Body = io.NopCloser(bytes.NewReader(modified))
 				resp.ContentLength = int64(len(modified))
 				resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
+				applyDshHtmlNoStore(resp.Header)
 			}
 
 			// 拦截并改写 PWA Web App Manifest 的应用图标路径
@@ -629,45 +589,6 @@ func injectHtmlPolyfill(body []byte) []byte {
 	return injectHtmlHead(body, []byte(httpPolyfillScript))
 }
 
-// hasDshAuthCookie 判断 Cookie 标头是否包含官方 dsh-auth- 会话凭证（且具备非空有效值）
-func hasDshAuthCookie(cookieHeader string) bool {
-	if cookieHeader == "" {
-		return false
-	}
-	for _, part := range strings.Split(cookieHeader, ";") {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "dsh-auth-") {
-			if idx := strings.IndexByte(part, '='); idx != -1 {
-				if strings.TrimSpace(part[idx+1:]) != "" {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-// clearDshAuthCookies 在响应中写入清除失效官方会话凭据的 Set-Cookie 标头
-func clearDshAuthCookies(header http.Header, cookieHeader string, paths ...string) {
-	if cookieHeader == "" {
-		return
-	}
-	if len(paths) == 0 {
-		paths = []string{"/"}
-	}
-	for _, part := range strings.Split(cookieHeader, ";") {
-		part = strings.TrimSpace(part)
-		if strings.HasPrefix(part, "dsh-auth-") {
-			if idx := strings.IndexByte(part, '='); idx != -1 {
-				name := strings.TrimSpace(part[:idx])
-				for _, p := range paths {
-					header.Add("Set-Cookie", fmt.Sprintf("%s=; Path=%s; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=Lax", name, p))
-					header.Add("Set-Cookie", fmt.Sprintf("%s=; Path=%s; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; SameSite=None; Secure", name, p))
-				}
-			}
-		}
-	}
-}
 
 // rewriteProxyManifest 注入修改 PWA manifest 中的应用图标为 /pwa-icon.svg
 func rewriteProxyManifest(body []byte) []byte {
@@ -687,5 +608,31 @@ func rewriteProxyManifest(body []byte) []byte {
 		return body
 	}
 	return newBytes
+}
+
+// appendDshSessionCookie 组装发往后端的 Cookie，剥离客户端旧凭据并注入服务端凭据
+func appendDshSessionCookie(clientCookie, sessionCookie string) string {
+	var kept []string
+	for _, part := range strings.Split(clientCookie, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" || strings.HasPrefix(part, "dsh-auth-") {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	if sessionCookie != "" {
+		kept = append(kept, sessionCookie)
+	}
+	return strings.Join(kept, "; ")
+}
+
+
+// applyDshHtmlNoStore 禁用 HTML 强缓存，避免复用旧版本资源
+func applyDshHtmlNoStore(header http.Header) {
+	header.Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	header.Set("Pragma", "no-cache")
+	header.Set("Expires", "0")
+	header.Del("ETag")
+	header.Del("Last-Modified")
 }
 

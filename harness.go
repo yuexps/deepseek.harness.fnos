@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -321,6 +322,10 @@ var (
 	launchTokenMu      sync.RWMutex
 	currentLaunchToken string
 	launchTokenRe      = regexp.MustCompile(`dsh web: .*?[?&]token=([A-Za-z0-9_-]+)`)
+
+	dshSessionMu      sync.RWMutex
+	cachedDshCookie   string
+	dshSessionLastTry time.Time
 )
 
 func GetCurrentLaunchToken() string {
@@ -330,16 +335,89 @@ func GetCurrentLaunchToken() string {
 }
 
 func SetCurrentLaunchToken(token string) {
+	trimmed := strings.TrimSpace(token)
 	launchTokenMu.Lock()
-	currentLaunchToken = strings.TrimSpace(token)
+	if currentLaunchToken != trimmed {
+		currentLaunchToken = trimmed
+		InvalidateDshSession()
+	}
 	launchTokenMu.Unlock()
-	if token != "" {
-		display := token
+	if trimmed != "" {
+		display := trimmed
 		if len(display) > 8 {
 			display = display[:8] + "..."
 		}
 		LogInfo("已捕获 Web 会话令牌: %s", display)
 	}
+}
+
+// InvalidateDshSession 清空缓存的官方会话凭据
+func InvalidateDshSession() {
+	dshSessionMu.Lock()
+	cachedDshCookie = ""
+	dshSessionLastTry = time.Time{}
+	dshSessionMu.Unlock()
+}
+
+// GetDshSessionCookie 获取官方会话凭据，缺失时自动向本地服务换取
+func GetDshSessionCookie() string {
+	dshSessionMu.RLock()
+	if cachedDshCookie != "" {
+		c := cachedDshCookie
+		dshSessionMu.RUnlock()
+		return c
+	}
+	if !dshSessionLastTry.IsZero() && time.Since(dshSessionLastTry) < 2*time.Second {
+		dshSessionMu.RUnlock()
+		return ""
+	}
+	dshSessionMu.RUnlock()
+
+	token := GetCurrentLaunchToken()
+	if token == "" {
+		return ""
+	}
+	return exchangeDshSessionCookie(token)
+}
+
+// exchangeDshSessionCookie 使用启动令牌向本地服务换取会话凭据
+func exchangeDshSessionCookie(token string) string {
+	dshSessionMu.Lock()
+	dshSessionLastTry = time.Now()
+	dshSessionMu.Unlock()
+	port := GetConfig().GetServerPort()
+	authority := fmt.Sprintf("127.0.0.1:%d", port)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/?token=%s", authority, url.QueryEscape(token)), nil)
+	if err != nil {
+		return ""
+	}
+	req.Host = authority
+	req.Header.Set("Host", authority)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	_ = resp.Body.Close()
+
+	for _, ck := range resp.Cookies() {
+		if strings.HasPrefix(ck.Name, "dsh-auth-") && ck.Value != "" {
+			val := ck.Name + "=" + ck.Value
+			dshSessionMu.Lock()
+			cachedDshCookie = val
+			dshSessionMu.Unlock()
+			LogInfo("已换取官方 Web 会话凭据 (authority=%s)", authority)
+			return val
+		}
+	}
+	return ""
 }
 
 // tokenCaptureWriter 在向日志系统输出的同时实时提取 Launch Token
