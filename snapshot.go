@@ -164,7 +164,6 @@ type CPUInfo struct {
 	Load1     float64 `json:"load1"`
 }
 
-
 func getDiskUsage(path string) (DiskUsage, error) {
 	if path == "" {
 		path = "/"
@@ -263,7 +262,6 @@ func getCPUInfo() (CPUInfo, error) {
 	return info, nil
 }
 
-
 const (
 	// MinDiskFreeBytes 磁盘至少 10GB 可用
 	MinDiskFreeBytes uint64 = 10 * 1024 * 1024 * 1024
@@ -304,7 +302,6 @@ func checkHardwareBaseline(extraDisk uint64) error {
 
 	return nil
 }
-
 
 // CheckResourceForSnapshot 创建快照前资源检查
 func CheckResourceForSnapshot() error {
@@ -742,6 +739,12 @@ func archiveSnapshotData(tarPath string, level int) error {
 }
 
 func addFileToTar(tw *tar.Writer, pw io.Writer, baseDir, relPath string, info os.FileInfo) error {
+	// 仅归档常规文件、目录与软链接，跳过特殊文件
+	mode := info.Mode()
+	if !mode.IsRegular() && !mode.IsDir() && (mode&os.ModeSymlink == 0) {
+		return nil
+	}
+
 	fullPath := filepath.Join(baseDir, filepath.FromSlash(relPath))
 
 	var linkTarget string
