@@ -783,10 +783,9 @@ func serveFnGatewayStatusPage(w http.ResponseWriter, r *http.Request, err error)
 		if r != nil {
 			reqInfo = fmt.Sprintf("请求路径: %s %s\n发生时间: %s\n", r.Method, r.URL.Path, time.Now().Format("2006-01-02 15:04:05"))
 		}
-		detailsHTML = template.HTML(fmt.Sprintf(`<details class="details-box">
-      <summary>详情</summary>
+		detailsHTML = template.HTML(fmt.Sprintf(`<div class="details-box">
       <pre>%s%s</pre>
-    </details>`, template.HTMLEscapeString(reqInfo), template.HTMLEscapeString(errDetail)))
+    </div>`, template.HTMLEscapeString(reqInfo), template.HTMLEscapeString(errDetail)))
 	}
 
 	data := struct {
