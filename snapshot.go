@@ -263,41 +263,26 @@ func getCPUInfo() (CPUInfo, error) {
 }
 
 const (
-	// MinDiskFreeBytes 磁盘至少 10GB 可用
-	MinDiskFreeBytes uint64 = 10 * 1024 * 1024 * 1024
-	// MinMemAvailableBytes 内存至少 1.5GB 可用
-	MinMemAvailableBytes uint64 = 1536 * 1024 * 1024
-	// MinCPUCores CPU 至少 2 核
-	MinCPUCores = 2
-	// MaxCPULoadRatio CPU 负载上限比率 (Load1 / Cores)
-	MaxCPULoadRatio = 1.5
+	// MinSnapshotDiskFreeBytes 创建快照最小空闲磁盘要求 (1GB)
+	MinSnapshotDiskFreeBytes uint64 = 1024 * 1024 * 1024
+	// MinMemAvailableBytes 执行快照任务最低可用内存 (256MB 防 OOM)
+	MinMemAvailableBytes uint64 = 256 * 1024 * 1024
 )
 
-// checkHardwareBaseline 检查硬件基线：硬盘>=10G可用，内存>=1.5G可用，CPU>=2核且不过载
-func checkHardwareBaseline(extraDisk uint64) error {
-	requiredDisk := MinDiskFreeBytes
-	if extraDisk > requiredDisk {
-		requiredDisk = extraDisk
-	}
-
+// checkSnapshotResource 检查快照所需的系统资源（动态磁盘与安全内存）
+func checkSnapshotResource(requiredDisk uint64) error {
 	disk, err := getDiskUsage(globalPkgVar)
 	if err == nil && disk.FreeBytes < requiredDisk {
-		return fmt.Errorf("磁盘可用空间不足 (当前: %s, 要求: >= %s)，请先清理硬盘空间", formatBytes(disk.FreeBytes), formatBytes(requiredDisk))
+		return fmt.Errorf("磁盘可用空间不足 (当前: %s, 要求: >= %s)，请先清理存储空间", formatBytes(disk.FreeBytes), formatBytes(requiredDisk))
 	}
 
 	mem, err := getMemoryInfo()
 	if err == nil && mem.AvailableBytes < MinMemAvailableBytes {
-		return fmt.Errorf("系统可用内存不足 (当前: %s, 要求: >= 1.5 GB)，避免部署更新或打包被系统 OOM 强杀", formatBytes(mem.AvailableBytes))
+		return fmt.Errorf("系统可用内存过低 (当前: %s, 要求: >= %s)，请释放部分内存后再操作", formatBytes(mem.AvailableBytes), formatBytes(MinMemAvailableBytes))
 	}
 
-	cpu, err := getCPUInfo()
-	if err == nil {
-		if cpu.Cores < MinCPUCores {
-			return fmt.Errorf("CPU 核心数不足 (当前: %d 核, 要求: >= 2 核)，不满足运行要求", cpu.Cores)
-		}
-		if cpu.Load1 > float64(cpu.Cores)*MaxCPULoadRatio {
-			return fmt.Errorf("系统 CPU 当前处于高负载繁忙状态 (1分钟负载: %.2f, %d 核)，请稍后重试", cpu.Load1, cpu.Cores)
-		}
+	if cpu, err := getCPUInfo(); err == nil && cpu.Cores > 0 && cpu.Load1 > float64(cpu.Cores)*2.5 {
+		LogWarning("[快照] 当前系统 CPU 负载较高 (1分钟负载: %.2f, %d 核)，快照任务可能耗时较长", cpu.Load1, cpu.Cores)
 	}
 
 	return nil
@@ -305,13 +290,16 @@ func checkHardwareBaseline(extraDisk uint64) error {
 
 // CheckResourceForSnapshot 创建快照前资源检查
 func CheckResourceForSnapshot() error {
-	return checkHardwareBaseline(0)
+	return checkSnapshotResource(MinSnapshotDiskFreeBytes)
 }
 
 // CheckResourceForRestore 还原快照前资源检查
 func CheckResourceForRestore(snapshotSizeBytes int64) error {
-	requiredDisk := uint64(snapshotSizeBytes)*2 + 500*1024*1024
-	return checkHardwareBaseline(requiredDisk)
+	requiredDisk := uint64(snapshotSizeBytes)*2 + 300*1024*1024
+	if requiredDisk < 500*1024*1024 {
+		requiredDisk = 500 * 1024 * 1024
+	}
+	return checkSnapshotResource(requiredDisk)
 }
 
 func formatBytes(bytes uint64) string {
