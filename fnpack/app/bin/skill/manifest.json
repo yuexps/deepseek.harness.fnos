@@ -1,7 +1,7 @@
 {
-  "name": "trim-cli",
-  "version": "0.1.0",
-  "description": "Command-line interface for TRIM NAS",
+  "name": "fnos",
+  "version": "0.1.1",
+  "description": "Use trim-cli to sign in to and manage fnOS devices, including files, photos, applications, Docker, downloads, logs, monitoring, networking, storage, users, and Baidu Netdisk. Use when the user mentions fnOS, 飞牛 OS, or a mainland China device. Excludes Media APIs and international-edition devices.",
   "entry": "SKILL.md",
   "bin": {
     "darwin-arm64": "bin/trim-cli-darwin-arm64",
@@ -15,11 +15,11 @@
   "entriesDir": "entries/",
   "entries": [
     "entries/trim-app.md",
+    "entries/trim-baidu-netdisk.md",
     "entries/trim-docker.md",
     "entries/trim-download.md",
     "entries/trim-file.md",
     "entries/trim-log.md",
-    "entries/trim-media.md",
     "entries/trim-monitor.md",
     "entries/trim-network.md",
     "entries/trim-photos.md",
@@ -38,6 +38,6 @@
     "network-management",
     "user-management",
     "photo-library",
-    "media-library"
+    "baidu-netdisk"
   ]
 }

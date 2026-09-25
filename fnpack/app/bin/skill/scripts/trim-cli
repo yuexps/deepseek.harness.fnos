@@ -5,6 +5,34 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BIN_DIR="$SCRIPT_DIR/../bin"
 
+reject_media_command() {
+  skip_value=0
+  for arg in "$@"; do
+    if [ "$skip_value" -eq 1 ]; then
+      skip_value=0
+      continue
+    fi
+    case "$arg" in
+      --host|--port|--profile|--scheme)
+        skip_value=1
+        ;;
+      --host=*|--port=*|--profile=*|--scheme=*|--allow-insecure-http|--tls-insecure)
+        ;;
+      --*)
+        ;;
+      media)
+        echo "Media commands are not available in this skill package." >&2
+        exit 2
+        ;;
+      *)
+        return
+        ;;
+    esac
+  done
+}
+
+reject_media_command "$@"
+
 OS=$(uname -s)
 ARCH=$(uname -m)
 

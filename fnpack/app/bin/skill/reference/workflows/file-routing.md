@@ -10,12 +10,12 @@
 | 看某个具体目录 | `trim-cli file ls /vol{n}/...` | 不要把聚合根和具体 canonical 路径混用 |
 | 在当前用户目录下搜文件 | `trim-cli file search <key>` | 不要手工猜当前用户目录；CLI 会先探测再推导 |
 | 在指定目录下搜文件 | `trim-cli file search <key> /vol{n}/...` | 不要传聚合根或非 canonical 路径 |
-| 上传本地文件到 NAS | `trim-cli file upload /vol{n}/... <localFile>` | 远端参数是目录，不是最终文件路径 |
+| 上传本地文件到 NAS | `trim-cli file upload /vol{n}/... <localFile> --yes` | 远端参数是目录，不是最终文件路径 |
 | 搜“别人共享给我”的文件 | `trim-cli file search-others <key>` | 不要把它当成 `file share list` 的别名 |
 | 看共享目录元数据 | `trim-cli file share info <path>` | 不要混成 share link 管理 |
 | 列可见共享目录 | `trim-cli file share list [uid]` | 不要把它当成文件搜索 |
 | 看 ACL | `trim-cli file acl get <path>` | 不要把 ACL 查询和共享目录查询混成同一个概念 |
-| 创建、删除、复制、移动文件 | `file mkdir/rm/cp/mv` | 不要对写操作使用聚合根 |
+| 创建、删除、复制、移动文件 | `file mkdir/rm/cp/mv` | 不要对写操作使用聚合根，并显式传 `--yes` |
 
 ## 2. 路径判断顺序
 

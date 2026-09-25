@@ -24,6 +24,8 @@ description: 当任务涉及列目录、搜索文件、上传文件、共享目�
 - `file share.*` 是共享目录，不是 share link
 - `file search-others` 是“别人共享给我”的文件搜索，不是共享目录列表
 - `file upload` 的远端参数是目录，CLI 会使用本地文件名拼出目标路径
+- `file check-upload` 可能分配临时上传占位；上传和预检都必须显式传 `--yes`
+- `file fav add/del` 会修改当前用户收藏夹，必须显式传 `--yes`
 
 ## 常用命令
 
@@ -31,7 +33,7 @@ description: 当任务涉及列目录、搜索文件、上传文件、共享目�
 ./scripts/trim-cli file ls
 ./scripts/trim-cli file ls /vol1/downloads
 ./scripts/trim-cli file search <key>
-./scripts/trim-cli file upload /vol1/1000/uploads ./local-file.txt --overwrite rename
+./scripts/trim-cli file upload /vol1/1000/uploads ./local-file.txt --overwrite rename --yes
 ./scripts/trim-cli file share list
 ./scripts/trim-cli file acl get /vol1/1000/docs
 ```

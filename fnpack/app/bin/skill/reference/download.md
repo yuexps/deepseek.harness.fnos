@@ -250,7 +250,7 @@ trim-cli download files <id>
 
 #### Trim CLI Mapping
 ```
-trim-cli download add-uri <uri> <saveDir>
+trim-cli download add-uri <uri> <saveDir> --yes
 ```
 
 #### Request
@@ -279,7 +279,7 @@ trim-cli download add-uri <uri> <saveDir>
 
 #### Trim CLI Mapping
 ```
-trim-cli download add-path <path> <saveDir>
+trim-cli download add-path <path> <saveDir> --yes
 ```
 
 #### Request
@@ -305,10 +305,10 @@ trim-cli download add-path <path> <saveDir>
 
 #### Trim CLI Mapping
 ```
-trim-cli download pause <id...>
-trim-cli download resume <id...>
-trim-cli download retry <id...>
-trim-cli download rm <id...>
+trim-cli download pause <id...> --yes
+trim-cli download resume <id...> --yes
+trim-cli download retry <id...> --yes
+trim-cli download rm <id...> --yes
 ```
 
 #### Request

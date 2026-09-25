@@ -14,7 +14,7 @@
 2. 上传一个小于 20 MiB 的本地文件：
 
 ```bash
-./scripts/trim-cli file upload /vol1/1000/tmp-upload ./demo.txt --overwrite rename
+./scripts/trim-cli file upload /vol1/1000/tmp-upload ./demo.txt --overwrite rename --yes
 ```
 
 3. 列出临时目录：
@@ -31,11 +31,14 @@
 2. 上传到临时目录：
 
 ```bash
-./scripts/trim-cli file upload /vol1/1000/tmp-upload ./large.bin --overwrite rename
+./scripts/trim-cli file upload /vol1/1000/tmp-upload ./large.bin --overwrite rename --yes
 ```
 
 3. 列目录确认远端存在原始文件名。
 4. 如果需要排查断点续传，可检查本地配置目录中的上传缓存；缓存里的 `upload_path` 是后端返回的 `.~#n` 上传路径，不是用户最终看到的文件名。
+5. 只有 endpoint、profile、登录用户、远端目标、大小、覆盖策略和本地 SHA-256 全部相同的缓存
+   才允许续传。同一路径换成另一个同大小文件时必须从新的 `check-upload` 开始。
+6. 并发验证同一 endpoint 和远端目标时，两个上传应跨进程串行；不要把锁等待误判为缓存损坏。
 
 ## 4. 清理
 
@@ -52,3 +55,4 @@
 - `file ls` 能看到上传后的文件。
 - 小文件不会依赖断点缓存。
 - 大文件可以产生断点缓存，缓存路径用于 HTTP 上传和续传，不直接作为最终展示路径。
+- legacy 缓存、身份字段不完整的缓存及本地文件指纹不匹配的缓存不会被续传。

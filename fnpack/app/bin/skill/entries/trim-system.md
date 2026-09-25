@@ -43,7 +43,6 @@ description: 查询静态系统信息、机器类型、系统版本、身份或�
 ./scripts/trim-cli system unix-time
 ./scripts/trim-cli system boot-on-power
 ./scripts/trim-cli system hardware
-./scripts/trim-cli system firmware-checksum
 ./scripts/trim-cli system reserved-partition
 ./scripts/trim-cli system is-trim-machine
 ./scripts/trim-cli system trim-feature

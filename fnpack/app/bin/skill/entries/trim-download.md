@@ -23,6 +23,7 @@ description: 涉及下载任务列表、搜索、创建、控制、统计或任�
 - 新建任务时要配套 `download add-uri <uri> <saveDir>` 或 `download add-path <path> <saveDir>`，`<saveDir>` 仍然必须是 `/vol{n}/...`
 - 统计数据通过 `download stat` 获取，命令输出不是某个单文件的条目
 - 控制命令 `download pause|resume|retry|rm <id...>` 只改变已存在任务，命令不会自动补路径
+- 创建和控制下载任务都是写操作，必须显式传 `--yes`
 - `download info` / `download files` 返回的路径字段直接映射 fnOS 卷定义，不要二次推演
 - 固定命令缺失的 `appcgi.downloadcenter.*` 端点使用 `download request`；JSON 中不要写 `req` 或 `reqid`
 
@@ -33,12 +34,12 @@ description: 涉及下载任务列表、搜索、创建、控制、统计或任�
 ./scripts/trim-cli download ls installer
 ./scripts/trim-cli download info <id>
 ./scripts/trim-cli download files <id>
-./scripts/trim-cli download add-uri https://example.com/file.iso /vol1/download
-./scripts/trim-cli download add-path /vol1/source.iso /vol1/download
-./scripts/trim-cli download pause <id...>
-./scripts/trim-cli download resume <id...>
-./scripts/trim-cli download retry <id...>
-./scripts/trim-cli download rm <id...>
+./scripts/trim-cli download add-uri https://example.com/file.iso /vol1/download --yes
+./scripts/trim-cli download add-path /vol1/source.torrent /vol1/download --yes
+./scripts/trim-cli download pause <id...> --yes
+./scripts/trim-cli download resume <id...> --yes
+./scripts/trim-cli download retry <id...> --yes
+./scripts/trim-cli download rm <id...> --yes
 ./scripts/trim-cli download stat
 ./scripts/trim-cli download request appcgi.downloadcenter.tracker.query --json '{}' --yes
 ```

@@ -25,7 +25,6 @@ var gatewayStatusPageTpl = template.Must(template.New("gateway_status").Parse(ga
 
 const fnGatewayPrefix = "/app/deepseek-harness/fngateway"
 
-var htmlAttrRegex = regexp.MustCompile(`(?i)\b(src|href|action|poster)\s*=\s*(["'])(/[^"']*)`)
 var manifestLinkRegex = regexp.MustCompile(`(?i)<link\b[^>]*\brel=["']manifest["'][^>]*>`)
 var cookiePathRegex = regexp.MustCompile(`(?i)\bpath\s*=\s*/(;|$)`)
 
@@ -37,6 +36,16 @@ func InitFnGateway(base *gin.RouterGroup) {
 
 // handleFnGateway 飞牛网关核心反向代理处理器
 func handleFnGateway(c *gin.Context) {
+	// 规范化裸路径为带末尾斜杠的重定向路径
+	if c.Request.URL.Path == fnGatewayPrefix {
+		target := fnGatewayPrefix + "/"
+		if c.Request.URL.RawQuery != "" {
+			target += "?" + c.Request.URL.RawQuery
+		}
+		c.Redirect(http.StatusMovedPermanently, target)
+		return
+	}
+
 	// 获取后端监听端口
 	serverPort := GetConfig().GetServerPort()
 	targetURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", serverPort))
@@ -68,7 +77,7 @@ func handleFnGateway(c *gin.Context) {
 			pr.Out.Header.Set("Sec-Fetch-Site", "same-origin")
 			pr.Out.Header.Set("Accept-Encoding", "identity")
 
-			// 注入服务端代持凭据，解耦对客户端 Cookie 的依赖
+			// 注入服务端代持凭据
 			if session := GetDshSessionCookie(); session != "" {
 				pr.Out.Header.Set("Cookie", appendDshSessionCookie(c.Request.Header.Get("Cookie"), session))
 			}
@@ -107,9 +116,9 @@ func handleFnGateway(c *gin.Context) {
 				return nil
 			}
 
-			// 改写页面标签并注入补丁脚本
+			// 改写页面标签并注入核心补丁脚本
 			if strings.Contains(contentType, "text/html") && resp.Body != nil {
-				// 移除 CSP 标头，避免阻断注入的网关适配脚本执行
+				// 移除 CSP 标头
 				resp.Header.Del("Content-Security-Policy")
 				resp.Header.Del("Content-Security-Policy-Report-Only")
 
@@ -166,6 +175,17 @@ func handleFnGateway(c *gin.Context) {
 
 // rewriteGatewayLocation 重写重定向地址
 func rewriteGatewayLocation(loc string) string {
+	if loc == "" {
+		return loc
+	}
+	// 剥除回环 Host，避免协议或端口漂移
+	if u, err := url.Parse(loc); err == nil && u.Host != "" {
+		if strings.HasPrefix(u.Host, "127.0.0.1") || strings.HasPrefix(u.Host, "localhost") {
+			u.Scheme = ""
+			u.Host = ""
+			loc = u.String()
+		}
+	}
 	if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") {
 		return loc
 	}
@@ -205,34 +225,23 @@ func rewriteGatewayManifest(body []byte) []byte {
 	return newBytes
 }
 
-// rewriteFnGatewayHtml 改写静态资源标签并注入补丁脚本
+// rewriteFnGatewayHtml 改写页面标签并注入核心补丁
 func rewriteFnGatewayHtml(body []byte) []byte {
-	// 正则替换属性路径
-	modified := htmlAttrRegex.ReplaceAllFunc(body, func(match []byte) []byte {
-		sub := htmlAttrRegex.FindSubmatch(match)
-		if len(sub) < 4 {
-			return match
-		}
-		attr := string(sub[1])
-		quote := string(sub[2])
-		path := string(sub[3])
-		// 排除协议相对路径与已带前缀路径
-		if strings.HasPrefix(path, "//") || strings.HasPrefix(path, fnGatewayPrefix) {
-			return match
-		}
-		newPath := fnGatewayPrefix + path
-		return fmt.Appendf(nil, "%s=%s%s", attr, quote, newPath)
-	})
-
-	// 确保 manifest 标签携带凭证发起请求，避免被飞牛 OS 网关鉴权拦截返回 invalid token
-	modified = manifestLinkRegex.ReplaceAllFunc(modified, func(match []byte) []byte {
+	// 注入凭据属性以放行 manifest 请求
+	modified := manifestLinkRegex.ReplaceAllFunc(body, func(match []byte) []byte {
 		if !bytes.Contains(bytes.ToLower(match), []byte("crossorigin")) {
 			return bytes.Replace(match, []byte("<link"), []byte("<link crossorigin=\"use-credentials\""), 1)
 		}
 		return match
 	})
 
-	return injectHtmlHead(modified, []byte(fnGatewayBridgeScript()))
+	// 兜底补齐缺失的 base 标签
+	if !bytes.Contains(bytes.ToLower(modified), []byte("<base")) {
+		modified = injectHtmlHead(modified, []byte(`<base href="./">`))
+	}
+
+	// 注入特权契约声明与样式隐藏补丁
+	return injectHtmlHead(modified, []byte(httpPolyfillScript))
 }
 
 // injectHtmlHead 将补丁脚本注入 HTML 的 head 头部
@@ -256,483 +265,6 @@ func injectHtmlHead(body, script []byte) []byte {
 	res.Write(script)
 	res.Write(body)
 	return res.Bytes()
-}
-
-// fnGatewayBridgeScript 生成前端运行时拦截补丁脚本
-func fnGatewayBridgeScript() string {
-	return `<base href="` + fnGatewayPrefix + `/"><style>[data-slot="settings.action"] { display: none !important; }</style><script>
-(function (prefix) {
-  if (typeof window === "undefined" || !window.location) return;
-  if (window.location.pathname.indexOf(prefix) !== 0 && window.location.pathname !== prefix) return;
-
-  var isAlreadyPrefixed = function (pathname) {
-    return prefix !== "" && (pathname === prefix || pathname.indexOf(prefix + "/") === 0);
-  };
-
-  var toGatewayUrl = function (value) {
-    if (!value) return null;
-    var str = String(value).trim();
-    if (str.indexOf("blob:") === 0 || str.indexOf("data:") === 0 || str.indexOf("javascript:") === 0 || str.indexOf("about:") === 0 || str.indexOf("#") === 0) return null;
-    var url;
-    try { url = new URL(str, window.location.href); }
-    catch (_) { return null; }
-    if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "ws:" && url.protocol !== "wss:") return null;
-    if (url.origin !== window.location.origin) return null;
-    if (isAlreadyPrefixed(url.pathname)) return null;
-    var rawPath = url.pathname.indexOf('/') === 0 ? url.pathname : '/' + url.pathname;
-    url.pathname = prefix + rawPath;
-    return url;
-  };
-
-  var toGatewaySrcset = function (srcsetStr) {
-    if (!srcsetStr || typeof srcsetStr !== "string") return srcsetStr;
-    return srcsetStr.split(",").map(function (part) {
-      var item = part.trim();
-      if (!item) return item;
-      var segs = item.split(/\s+/);
-      var mapped = toGatewayUrl(segs[0]);
-      if (mapped !== null) segs[0] = mapped.toString();
-      return segs.join(" ");
-    }).join(", ");
-  };
-
-  var rewriteHtmlString = function (html) {
-    if (typeof html !== "string" || html.indexOf("/") === -1) return html;
-    var htmlAttrRe = new RegExp("\\b(src|href|action|poster)=([\"'])(/[^\"']*)\\2", "gi");
-    return html.replace(htmlAttrRe, function (match, attr, quote, path) {
-      if (isAlreadyPrefixed(path) || path.indexOf("//") === 0) return match;
-      return attr + "=" + quote + prefix + path + quote;
-    });
-  };
-
-  var installBridge = function (targetWindow) {
-    if (!targetWindow || targetWindow.__fnGatewayBridgeReady) return;
-    targetWindow.__fnGatewayBridgeReady = true;
-
-    // 拦截 Location 原型（pathname、assign、replace）
-    if (targetWindow.Location && targetWindow.Location.prototype) {
-      var locProto = targetWindow.Location.prototype;
-      var locPathDesc = Object.getOwnPropertyDescriptor(locProto, "pathname");
-      if (locPathDesc && locPathDesc.get && locPathDesc.configurable) {
-        var nativeLocPathGet = locPathDesc.get;
-        var nativeLocPathSet = locPathDesc.set;
-        try {
-          Object.defineProperty(locProto, "pathname", {
-            get: function () {
-              var p = nativeLocPathGet.call(this);
-              if (isAlreadyPrefixed(p)) {
-                var stripped = p.slice(prefix.length);
-                return stripped.indexOf("/") === 0 ? stripped : "/" + stripped;
-              }
-              return p;
-            },
-            set: function (val) {
-              if (nativeLocPathSet) {
-                if (typeof val === "string" && val.indexOf("/") === 0 && !isAlreadyPrefixed(val)) {
-                  val = prefix + val;
-                }
-                return nativeLocPathSet.call(this, val);
-              }
-            },
-            configurable: true,
-            enumerable: true
-          });
-        } catch (_) {}
-      }
-
-      if (locProto.assign) {
-        var nativeAssign = locProto.assign;
-        locProto.assign = function (url) {
-          var mapped = toGatewayUrl(url);
-          return nativeAssign.call(this, mapped !== null ? mapped.toString() : url);
-        };
-      }
-      if (locProto.replace) {
-        var nativeReplace = locProto.replace;
-        locProto.replace = function (url) {
-          var mapped = toGatewayUrl(url);
-          return nativeReplace.call(this, mapped !== null ? mapped.toString() : url);
-        };
-      }
-    }
-
-    // crypto.randomUUID 兼容补丁
-    var cryptoObject = targetWindow.crypto;
-    if (cryptoObject && typeof cryptoObject.randomUUID !== "function" && typeof cryptoObject.getRandomValues === "function") {
-      var getRandomValues = cryptoObject.getRandomValues.bind(cryptoObject);
-      var randomUUID = function () {
-        var bytes = new Uint8Array(16);
-        getRandomValues(bytes);
-        bytes[6] = (bytes[6] & 15) | 64;
-        bytes[8] = (bytes[8] & 63) | 128;
-        var hex = Array.from(bytes, function (byte) { return ("0" + byte.toString(16)).slice(-2); }).join("");
-        return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
-      };
-      var installRandomUUID = function (target) {
-        try {
-          Object.defineProperty(target, "randomUUID", { configurable: true, writable: true, value: randomUUID });
-          return typeof target.randomUUID === "function";
-        } catch (_) { return false; }
-      };
-      if (!installRandomUUID(cryptoObject) && Object.getPrototypeOf(cryptoObject)) installRandomUUID(Object.getPrototypeOf(cryptoObject));
-    }
-
-    // 拦截 Fetch API
-    if (targetWindow.fetch) {
-      var nativeFetch = targetWindow.fetch.bind(targetWindow);
-      targetWindow.fetch = function (input, init) {
-        if (typeof Request !== "undefined" && input instanceof Request) {
-          var mapped = toGatewayUrl(input.url);
-          if (mapped !== null) {
-            try {
-              input = new Request(mapped.toString(), input);
-            } catch (_) {}
-          }
-        } else {
-          var mapped = toGatewayUrl(input);
-          if (mapped !== null) input = mapped.toString();
-        }
-        return nativeFetch(input, init);
-      };
-    }
-
-    // 拦截 XMLHttpRequest
-    if (targetWindow.XMLHttpRequest) {
-      var nativeXHROpen = targetWindow.XMLHttpRequest.prototype.open;
-      targetWindow.XMLHttpRequest.prototype.open = function (method, url) {
-        var mapped = toGatewayUrl(url);
-        if (mapped !== null) arguments[1] = mapped.toString();
-        return nativeXHROpen.apply(this, arguments);
-      };
-    }
-
-    // 属性描述符 Setter 拦截器
-    var hookProperty = function (proto, prop, isSrcset) {
-      if (!proto) return;
-      var desc = Object.getOwnPropertyDescriptor(proto, prop);
-      if (!desc || !desc.set) return;
-      var nativeSet = desc.set;
-      Object.defineProperty(proto, prop, {
-        set: function (val) {
-          if (isSrcset) return nativeSet.call(this, toGatewaySrcset(val));
-          var mapped = toGatewayUrl(val);
-          return nativeSet.call(this, mapped !== null ? mapped.toString() : val);
-        },
-        get: desc.get,
-        configurable: true,
-        enumerable: true
-      });
-    };
-
-    // 批量劫持关键 DOM 原型属性
-    if (targetWindow.HTMLImageElement) {
-      hookProperty(targetWindow.HTMLImageElement.prototype, "src", false);
-      hookProperty(targetWindow.HTMLImageElement.prototype, "srcset", true);
-    }
-    if (targetWindow.HTMLLinkElement) hookProperty(targetWindow.HTMLLinkElement.prototype, "href", false);
-    if (targetWindow.HTMLAnchorElement) hookProperty(targetWindow.HTMLAnchorElement.prototype, "href", false);
-    if (targetWindow.HTMLIFrameElement) hookProperty(targetWindow.HTMLIFrameElement.prototype, "src", false);
-    if (targetWindow.HTMLMediaElement) hookProperty(targetWindow.HTMLMediaElement.prototype, "src", false);
-    if (targetWindow.HTMLVideoElement) {
-      hookProperty(targetWindow.HTMLVideoElement.prototype, "poster", false);
-    }
-    if (targetWindow.HTMLSourceElement) {
-      hookProperty(targetWindow.HTMLSourceElement.prototype, "src", false);
-      hookProperty(targetWindow.HTMLSourceElement.prototype, "srcset", true);
-    }
-    if (targetWindow.HTMLTrackElement) hookProperty(targetWindow.HTMLTrackElement.prototype, "src", false);
-    if (targetWindow.HTMLInputElement) hookProperty(targetWindow.HTMLInputElement.prototype, "src", false);
-    if (targetWindow.HTMLFormElement) hookProperty(targetWindow.HTMLFormElement.prototype, "action", false);
-    if (targetWindow.HTMLObjectElement) hookProperty(targetWindow.HTMLObjectElement.prototype, "data", false);
-    if (targetWindow.HTMLEmbedElement) hookProperty(targetWindow.HTMLEmbedElement.prototype, "src", false);
-
-    // 拦截 setAttribute 与 setAttributeNS
-    if (targetWindow.Element) {
-      var nativeSetAttr = targetWindow.Element.prototype.setAttribute;
-      targetWindow.Element.prototype.setAttribute = function (name, value) {
-        var n = String(name).toLowerCase();
-        var tag = (this.tagName || "").toUpperCase();
-        if (n === "src" || n === "href" || n === "action" || n === "poster" || (n === "data" && tag === "OBJECT")) {
-          var mapped = toGatewayUrl(value);
-          if (mapped !== null) value = mapped.toString();
-        } else if (n === "srcset") {
-          value = toGatewaySrcset(value);
-        }
-        return nativeSetAttr.call(this, name, value);
-      };
-
-      if (targetWindow.Element.prototype.setAttributeNS) {
-        var nativeSetAttrNS = targetWindow.Element.prototype.setAttributeNS;
-        targetWindow.Element.prototype.setAttributeNS = function (ns, name, value) {
-          var n = String(name).toLowerCase();
-          var tag = (this.tagName || "").toUpperCase();
-          if (n === "src" || n === "href" || n === "action" || n === "poster" || (n === "data" && tag === "OBJECT") || n.indexOf("href") !== -1) {
-            var mapped = toGatewayUrl(value);
-            if (mapped !== null) value = mapped.toString();
-          }
-          return nativeSetAttrNS.call(this, ns, name, value);
-        };
-      }
-
-      // 拦截 innerHTML 与 insertAdjacentHTML
-      var innerDesc = Object.getOwnPropertyDescriptor(targetWindow.Element.prototype, "innerHTML");
-      if (innerDesc && innerDesc.set) {
-        var nativeInnerSet = innerDesc.set;
-        Object.defineProperty(targetWindow.Element.prototype, "innerHTML", {
-          set: function (val) {
-            return nativeInnerSet.call(this, rewriteHtmlString(val));
-          },
-          get: innerDesc.get,
-          configurable: true,
-          enumerable: true
-        });
-      }
-
-      if (targetWindow.Element.prototype.insertAdjacentHTML) {
-        var nativeInsertAdjHTML = targetWindow.Element.prototype.insertAdjacentHTML;
-        targetWindow.Element.prototype.insertAdjacentHTML = function (pos, html) {
-          return nativeInsertAdjHTML.call(this, pos, rewriteHtmlString(html));
-        };
-      }
-    }
-
-    // 拦截 <a> 标签点击
-    targetWindow.addEventListener("click", function (e) {
-      var target = e.target;
-      while (target && target.tagName !== "A") {
-        target = target.parentElement;
-      }
-      if (target && target.tagName === "A") {
-        var href = target.getAttribute("href") || target.href;
-        var mapped = toGatewayUrl(href);
-        if (mapped !== null) {
-          target.setAttribute("href", mapped.toString());
-          if (target.href) target.href = mapped.toString();
-        }
-      }
-    }, true);
-
-    // 拦截 DOM 节点动态插入并自动穿透同源 iframe
-    var injectIframe = function (iframeEl) {
-      try {
-        if (!iframeEl || iframeEl.__bridgeHooked) return;
-        iframeEl.__bridgeHooked = true;
-        var hookWin = function () {
-          try {
-            var win = iframeEl.contentWindow;
-            if (win && win !== targetWindow) {
-              installBridge(win);
-            }
-          } catch (_) {}
-        };
-        iframeEl.addEventListener("load", hookWin);
-        hookWin();
-      } catch (_) {}
-    };
-
-    var rewriteElementNode = function (node) {
-      if (!node || node.nodeType !== 1) return;
-      var tag = node.tagName;
-      if (tag === "SCRIPT" || tag === "IMG" || tag === "IFRAME" || tag === "AUDIO" || tag === "VIDEO" || tag === "EMBED") {
-        var rawAttr = node.getAttribute("src");
-        if (rawAttr && !isAlreadyPrefixed(rawAttr)) {
-          var mapped = toGatewayUrl(rawAttr);
-          if (mapped !== null) node.setAttribute("src", mapped.toString());
-        } else if (!rawAttr && node.src && !isAlreadyPrefixed(node.src)) {
-          var mapped = toGatewayUrl(node.src);
-          if (mapped !== null) node.src = mapped.toString();
-        }
-        if (tag === "VIDEO" && node.hasAttribute("poster")) {
-          var rawPoster = node.getAttribute("poster");
-          if (rawPoster && !isAlreadyPrefixed(rawPoster)) {
-            var mappedPoster = toGatewayUrl(rawPoster);
-            if (mappedPoster !== null) node.setAttribute("poster", mappedPoster.toString());
-          }
-        }
-        if (tag === "IFRAME") injectIframe(node);
-      } else if (tag === "LINK" || tag === "A") {
-        if (tag === "LINK" && (node.rel === "manifest" || node.getAttribute("rel") === "manifest")) {
-          if (!node.hasAttribute("crossorigin")) node.setAttribute("crossorigin", "use-credentials");
-        }
-        var rawHref = node.getAttribute("href");
-        if (rawHref && !isAlreadyPrefixed(rawHref)) {
-          var mapped = toGatewayUrl(rawHref);
-          if (mapped !== null) {
-            node.setAttribute("href", mapped.toString());
-            if (node.href) node.href = mapped.toString();
-          }
-        }
-      } else if (tag === "OBJECT") {
-        var data = node.getAttribute("data") || node.data;
-        if (data && !isAlreadyPrefixed(data)) {
-          var mapped = toGatewayUrl(data);
-          if (mapped !== null) node.setAttribute("data", mapped.toString());
-        }
-      } else if (tag === "FORM") {
-        var action = node.getAttribute("action") || node.action;
-        if (action && !isAlreadyPrefixed(action)) {
-          var mapped = toGatewayUrl(action);
-          if (mapped !== null) node.setAttribute("action", mapped.toString());
-        }
-      }
-    };
-
-    if (targetWindow.Element && targetWindow.Element.prototype.append) {
-      var nativeAppend = targetWindow.Element.prototype.append;
-      targetWindow.Element.prototype.append = function () {
-        for (var i = 0; i < arguments.length; i++) rewriteElementNode(arguments[i]);
-        return nativeAppend.apply(this, arguments);
-      };
-    }
-    if (targetWindow.Node) {
-      var nativeAppendChild = targetWindow.Node.prototype.appendChild;
-      targetWindow.Node.prototype.appendChild = function (node) {
-        rewriteElementNode(node);
-        return nativeAppendChild.call(this, node);
-      };
-      var nativeInsertBefore = targetWindow.Node.prototype.insertBefore;
-      targetWindow.Node.prototype.insertBefore = function (node, reference) {
-        rewriteElementNode(node);
-        return nativeInsertBefore.call(this, node, reference);
-      };
-    }
-
-    if (targetWindow.MutationObserver) {
-      var observer = new MutationObserver(function (mutations) {
-        for (var i = 0; i < mutations.length; i++) {
-          var nodes = mutations[i].addedNodes;
-          for (var j = 0; j < nodes.length; j++) {
-            if (nodes[j].tagName === "IFRAME") injectIframe(nodes[j]);
-          }
-        }
-      });
-      if (targetWindow.document && targetWindow.document.documentElement) {
-        observer.observe(targetWindow.document.documentElement, { childList: true, subtree: true });
-      }
-    }
-
-    // 拦截 SPA 路由 History API
-    if (targetWindow.history) {
-      var wrapHistory = function (orig) {
-        if (!orig) return orig;
-        return function (state, unused, url) {
-          if (url) {
-            var mapped = toGatewayUrl(url);
-            if (mapped !== null) url = mapped.toString();
-          }
-          return orig.call(this, state, unused, url);
-        };
-      };
-      targetWindow.history.pushState = wrapHistory(targetWindow.history.pushState);
-      targetWindow.history.replaceState = wrapHistory(targetWindow.history.replaceState);
-    }
-
-    // 拦截 EventSource 流式连接
-    if (targetWindow.EventSource) {
-      var nativeEventSource = targetWindow.EventSource;
-      targetWindow.EventSource = new Proxy(nativeEventSource, {
-        construct: function (target, args, newTarget) {
-          var mapped = toGatewayUrl(args[0]);
-          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
-          return Reflect.construct(target, args, newTarget);
-        }
-      });
-    }
-
-    // 拦截 WebSocket 连接
-    if (targetWindow.WebSocket) {
-      var nativeWebSocket = targetWindow.WebSocket;
-      var page = new URL(targetWindow.location.href);
-      var pagePort = page.port || (page.protocol === "https:" ? "443" : "80");
-      targetWindow.WebSocket = new Proxy(nativeWebSocket, {
-        construct: function (target, args, newTarget) {
-          var url;
-          try { url = new URL(String(args[0]), targetWindow.location.href); }
-          catch (_) { return Reflect.construct(target, args, newTarget); }
-          var socketPort = url.port || (url.protocol === "wss:" ? "443" : "80");
-          if ((url.protocol === "ws:" || url.protocol === "wss:") &&
-              url.hostname === page.hostname && socketPort === pagePort &&
-              !isAlreadyPrefixed(url.pathname)) {
-            var rawPath = url.pathname.indexOf('/') === 0 ? url.pathname : '/' + url.pathname;
-            url.pathname = prefix + rawPath;
-            args = [url.toString()].concat(args.slice(1));
-          }
-          return Reflect.construct(target, args, newTarget);
-        }
-      });
-    }
-
-    // 拦截 navigator.sendBeacon
-    if (targetWindow.navigator && typeof targetWindow.navigator.sendBeacon === "function") {
-      var nativeSendBeacon = targetWindow.navigator.sendBeacon.bind(targetWindow.navigator);
-      targetWindow.navigator.sendBeacon = function (url, data) {
-        var mapped = toGatewayUrl(url);
-        return nativeSendBeacon(mapped !== null ? mapped.toString() : url, data);
-      };
-    }
-
-    // 拦截 window.open
-    if (typeof targetWindow.open === "function") {
-      var nativeWindowOpen = targetWindow.open.bind(targetWindow);
-      targetWindow.open = function (url, target, features) {
-        var mapped = toGatewayUrl(url);
-        return nativeWindowOpen(mapped !== null ? mapped.toString() : url, target, features);
-      };
-    }
-
-    // 拦截 Worker 与 SharedWorker
-    if (targetWindow.Worker) {
-      var nativeWorker = targetWindow.Worker;
-      targetWindow.Worker = new Proxy(nativeWorker, {
-        construct: function (target, args, newTarget) {
-          var mapped = toGatewayUrl(args[0]);
-          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
-          return Reflect.construct(target, args, newTarget);
-        }
-      });
-    }
-    if (targetWindow.SharedWorker) {
-      var nativeSharedWorker = targetWindow.SharedWorker;
-      targetWindow.SharedWorker = new Proxy(nativeSharedWorker, {
-        construct: function (target, args, newTarget) {
-          var mapped = toGatewayUrl(args[0]);
-          if (mapped !== null) args = [mapped.toString()].concat(args.slice(1));
-          return Reflect.construct(target, args, newTarget);
-        }
-      });
-    }
-    if (targetWindow.navigator && targetWindow.navigator.serviceWorker && typeof targetWindow.navigator.serviceWorker.register === "function") {
-      var nativeSWRegister = targetWindow.navigator.serviceWorker.register.bind(targetWindow.navigator.serviceWorker);
-      targetWindow.navigator.serviceWorker.register = function (scriptURL, options) {
-        var mapped = toGatewayUrl(scriptURL);
-        if (mapped !== null) scriptURL = mapped.toString();
-        if (options && options.scope) {
-          var scopeMapped = toGatewayUrl(options.scope);
-          if (scopeMapped !== null) options.scope = scopeMapped.pathname;
-        }
-        return nativeSWRegister(scriptURL, options);
-      };
-    }
-
-    // DSH 客户端回环状态与配置持久化兼容补丁（上游原生 ownsHost 契约声明）
-    try{targetWindow.__DSH_TRANSPORT__=Object.assign(targetWindow.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}
-
-    // DSH 客户端附件上传网关子路径适配（上游原生 __DSH_FILE_UPLOAD__ 契约）
-    try {
-      targetWindow.__DSH_FILE_UPLOAD__ = {
-        fetch: function (inputUrl, init) {
-          var mapped = toGatewayUrl(inputUrl);
-          var finalInit = init || {};
-          if (!finalInit.credentials) finalInit.credentials = "include";
-          return targetWindow.fetch(mapped !== null ? mapped.toString() : inputUrl, finalInit);
-        }
-      };
-    } catch (_) {}
-  };
-
-  installBridge(window);
-})("` + fnGatewayPrefix + `");
-</script>`
 }
 
 // serveFnGatewayStatusPage 渲染符合系统设计规范的网关状态/错误页面

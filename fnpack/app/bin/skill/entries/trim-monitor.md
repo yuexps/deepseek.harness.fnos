@@ -21,7 +21,7 @@ description: 查询运行态指标如 CPU、内存、网络、磁盘、进程和
 
 - 这里只负责运行中的指标，不负责描述系统身份、型号或静态配置
 - `monitor cpu` / `monitor memory` 返回的是时间序列样本，理解它们需要在回复里找 `usage`、`cores` 等字段
-- `monitor gen` 的 `--item` 支持逗号分隔，也可以重复传入
+- `monitor gen` 的 `--item` 支持逗号分隔，也可以重复传入；指标只能是 `storeSpeed`、`netSpeed`、`cpuBusy` 或 `memPercent`
 - `monitor proc-info --pids` 只接受正整数 PID，多个 PID 可用逗号分隔
 - 大多数命令是读取型查询；`monitor mute-beeper` 和 `monitor request` 需要确认或 `--yes`
 - `monitor request` 仅允许 `appcgi.resmon.*` 端点，JSON 中不要写 `req` 或 `reqid`
@@ -35,7 +35,6 @@ description: 查询运行态指标如 CPU、内存、网络、磁盘、进程和
 ./scripts/trim-cli monitor disk
 ./scripts/trim-cli monitor gen --item storeSpeed,netSpeed --item cpuBusy
 ./scripts/trim-cli monitor proc-list
-./scripts/trim-cli monitor proc-list --uid 1000
 ./scripts/trim-cli monitor proc-info --pids 123,456
 ./scripts/trim-cli monitor proc-srv
 ./scripts/trim-cli monitor sys-warn

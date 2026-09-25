@@ -5,7 +5,9 @@
 
 ## 1. 认证检查
 
-Photos 复用当前 profile 的 fnOS session。没有有效 session 时先执行 `trim-cli login`。
+Photos 复用当前 profile 的代理 session。没有有效 session 时运行一次交互式
+`trim-cli login`：用户自行打开链接、登录并授权，再把一次性 code 粘贴回 CLI 提示。不要自动
+填写账号密码、点击授权或读取页面 code。
 操作多台 NAS 时应显式使用对应的 `--profile`、`--host` 和 `--port`，不要跨设备复用
 session。
 

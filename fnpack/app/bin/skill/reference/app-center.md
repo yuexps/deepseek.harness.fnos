@@ -21,12 +21,11 @@
 | `app config auto-update <appName>` | Enable or disable app auto update | Success message |
 | `app config proxy-access <appName>` | Allow or deny proxy access | Success message |
 | `app config post-wizard <appName> --fields <json>` | Submit app wizard custom parameters | Success message |
-| `app service list` / `app entry list` | List service and entry metadata | JSON |
-| `app shortcut list` | List desktop shortcuts managed by App Center | JSON |
-| `app shortcut add/del <appName> <position> <serviceName>` | Add or delete App Center shortcut entries | Success message |
+| `app service list` | List service metadata | JSON |
+| `app entry list` | List available application entries | JSON |
+| `app desktop list` | List the current user's desktop layout and entries | JSON |
 | `app guide check-installed <appName...>` | Check whether guide-required apps are installed | JSON |
 | `app guide batch-download-install <volumeId> <appName...>` | Start guide batch download/install tasks | Success message |
-| `app risk last/list` | Read App Center risk snapshots; `list` derives installed app data automatically | JSON |
 | `app operation settings` | Read operation settings | JSON |
 | `app openapi app-detail <appName>` | Read OpenAPI app detail for authorization flows | JSON |
 | `app openapi allow-user-auth-paths <appName>` | Read whether users may authorize paths to an app | JSON |
@@ -70,18 +69,16 @@
 | `app config proxy-access` | POST | `/app-center/v1/config/proxy-access-allowed` |
 | `app config post-wizard` | POST | `/app-center/v1/config/wizard` |
 | `app service list` | GET | `/app-center/v1/service/list` |
-| `app entry list` | GET | `/app-center/v1/entry/list` |
-| `app shortcut list` | GET | `/app-center/v1/shortcut/list` |
-| `app shortcut add/del` | POST | `/app-center/v1/shortcut/add`, `/app-center/v1/shortcut/del` |
+| `app entry list` | WebSocket CGI | `appcgi.sac.entry.v1.getEntryList` |
+| `app desktop list` | WebSocket CGI | `appcgi.sac.entry.v1.getUserDesktop` |
 | `app guide check-installed` | POST | `/app-center/v1/app/check-installed` |
 | `app guide batch-download-install` | POST | `/app-center/v1/batch-download-install` |
-| `app risk last/list` | GET | `/app-center/v1/app/risk/*`; `list` sends derived `installedList` |
 | `app operation settings` | GET | `/app-center/v1/operation/settings` |
 | `app openapi app-detail` | GET | `/app-center/openapi/v1/app/detail` |
 | `app openapi allow-user-auth-paths` | GET | `/app-center/openapi/v1/app/allow-user-authorization-paths` |
 | `app openapi add-user-auth-path` | POST | `/app-center/openapi/v1/user/authorization-paths` |
 | `app openapi add-user-auth-inherit-file` | POST | `/app-center/openapi/v1/user/authorization-paths/inherit-file` |
-| `app sac app-store-list` | GET | `/app-center/sac/entry/v1/app-store/list` |
+| `app sac app-store-list` | WebSocket CGI | `appcgi.sac.entry.v1.appStoreList` |
 | `app task-status` | POST | `/app-center/v1/common/task-status` |
 | `app task-cancel` | POST | `/app-center/v1/common/task-cancel` |
 | `app download cancel` | POST | `/app-center/v1/download/cancel` |
@@ -107,7 +104,7 @@ All write commands require `--yes`.
 
 `app task-cancel` requires `--yes`. The common task status/cancel endpoints use `taskID` in the request body.
 
-`app check-update --post`, `app common volume --set`, `app download cancel`, `app install-cancel`, `app update-cancel`, `app restart`, config writes, shortcut writes, and guide batch download/install are write operations and require `--yes`.
+`app check-update --post`, `app common volume --set`, `app download cancel`, `app install-cancel`, `app update-cancel`, `app restart`, config writes, and guide batch download/install are write operations and require `--yes`.
 
 OpenAPI user authorization write commands require `--yes` and require a concrete `/vol...` path. These commands model app/user authorization flows rather than global App Center settings.
 
@@ -204,9 +201,7 @@ Uninstall waits until the app no longer appears in the installed app list. This 
 ./scripts/trim-cli app config detail trim.alist
 ./scripts/trim-cli app service list
 ./scripts/trim-cli app entry list --only-hidden
-./scripts/trim-cli app shortcut list
-./scripts/trim-cli app shortcut add trim.alist desktop web --yes
-./scripts/trim-cli app shortcut del trim.alist desktop web --yes
+./scripts/trim-cli app desktop list
 ./scripts/trim-cli app config set-sys --fields '{"autoRunNewApp":true}' --yes
 ./scripts/trim-cli app config set trim.alist --fields '{"services":[],"extraAuthorizationPath":[]}' --yes
 ./scripts/trim-cli app config auto-update trim.alist --enable --yes
@@ -214,8 +209,6 @@ Uninstall waits until the app no longer appears in the installed app list. This 
 ./scripts/trim-cli app config post-wizard trim.alist --fields '{"customParameters":[]}' --yes
 ./scripts/trim-cli app guide check-installed trim.media trim.photos
 ./scripts/trim-cli app guide batch-download-install 2 trim.media trim.photos --yes
-./scripts/trim-cli app risk last
-./scripts/trim-cli app risk list
 ./scripts/trim-cli app operation settings
 ./scripts/trim-cli app openapi app-detail trim.alist
 ./scripts/trim-cli app openapi allow-user-auth-paths trim.alist

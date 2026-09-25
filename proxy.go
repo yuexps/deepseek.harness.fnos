@@ -502,25 +502,7 @@ func restartReverseProxy() {
 	}
 }
 
-const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none !important; }</style><script>(function(){
-  try{window.__DSH_TRANSPORT__=Object.assign(window.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}
-  var c=window.crypto;
-  if(c&&typeof c.randomUUID!=="function"&&typeof c.getRandomValues==="function"){
-    var getRand=c.getRandomValues.bind(c);
-    var uuid=function(){
-      var b=new Uint8Array(16);
-      getRand(b);
-      b[6]=(b[6]&15)|64;
-      b[8]=(b[8]&63)|128;
-      var h=Array.from(b,function(x){return("0"+x.toString(16)).slice(-2);}).join("");
-      return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);
-    };
-    var install=function(target){
-      try{Object.defineProperty(target,"randomUUID",{configurable:true,writable:true,value:uuid});return typeof target.randomUUID==="function";}catch(_){return false;}
-    };
-    if(!install(c)&&Object.getPrototypeOf(c))install(Object.getPrototypeOf(c));
-  }
-})();</script>`
+const httpPolyfillScript = `<style>[data-slot="settings.action"] { display: none !important; }</style><script>try{window.__DSH_TRANSPORT__=Object.assign(window.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}</script>`
 
 // injectHtmlPolyfill 将兼容补丁注入 HTML 的 head 头部
 func injectHtmlPolyfill(body []byte) []byte {

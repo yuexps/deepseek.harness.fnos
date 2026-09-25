@@ -122,13 +122,13 @@ CLI 行为：
 
 | CLI 命令 | Endpoint | Request 参数 | 用途 |
 | --- | --- | --- | --- |
-| `trim-cli monitor gen --item storeSpeed,netSpeed` | `appcgi.resmon.gen` | `item`: 字符串数组；可重复传 `--item` 或用逗号分隔 | 聚合指标查询 |
+| `trim-cli monitor gen --item storeSpeed,netSpeed` | `appcgi.resmon.gen` | `item`: 仅支持 `storeSpeed`、`netSpeed`、`cpuBusy`、`memPercent`；可重复传 `--item` 或用逗号分隔 | 聚合指标查询 |
 | `trim-cli monitor net` | `appcgi.resmon.net` | 无 | 网络指标 |
 | `trim-cli monitor disk` | `appcgi.resmon.disk` | 无 | 磁盘指标 |
 | `trim-cli monitor gpu` | `appcgi.resmon.gpu` | 无 | GPU 指标 |
 | `trim-cli monitor npu` | `appcgi.resmon.npu` | 无 | NPU 指标 |
 | `trim-cli monitor proc-info --pids 123,456` | `appcgi.resmon.proc.info` | `pids`: 正整数数组 | 指定进程详情 |
-| `trim-cli monitor proc-list` | `appcgi.resmon.proc.list` | 可选 `uid`: 非负整数 | 进程列表 |
+| `trim-cli monitor proc-list` | `appcgi.resmon.proc.list` | 无 | 进程列表；响应可能分批返回，CLI 会聚合完整列表 |
 | `trim-cli monitor proc-srv` | `appcgi.resmon.proc.srv` | 无 | 服务视图 |
 | `trim-cli monitor sys-warn` | `appcgi.resmon.sysWarn` | 无 | 系统告警 |
 | `trim-cli monitor battery` | `appcgi.resmon.battery` | 无 | 电池状态 |
@@ -138,9 +138,9 @@ CLI 行为：
 | `trim-cli monitor beep-reasons` | `appcgi.resmon.alert.getBeepReasons` | 无 | 当前或历史触发原因 |
 
 参数约束：
-- `--item` 空值会被忽略；最终至少需要一个有效 item。
+- `--item` 只支持 `storeSpeed`、`netSpeed`、`cpuBusy`、`memPercent`；空值会被忽略，非法指标会在发送请求前拒绝。
 - `--pids` 只接受正整数，重复 PID 会自动去重。
-- `--uid` 只接受非负整数；未传时查询默认进程列表。
+- `beep-supported`、`beep-events`、`beep-reasons` 只适用于带蜂鸣器能力的 TRIM 机器。成功响应缺少 `data` 时，CLI 会检查机器类型与 `beep` 能力，仅在明确为非 TRIM 机器或 `beep: false` 时输出 `[]`；能力未知、`beep: true` 或其他 monitor 命令缺少 `data` 时仍报错。
 
 ### 写操作和泛化请求
 

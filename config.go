@@ -261,7 +261,7 @@ func SaveConfig(cfg Config) error {
 	return nil
 }
 
-// ApplyBuiltinSkillConfig 同步或切换内置飞牛官方 TRIM CLI 技能文件
+// ApplyBuiltinSkillConfig 同步或切换内置飞牛官方技能文件
 func ApplyBuiltinSkillConfig() {
 	skillSrc := filepath.Join(globalAppDest, "bin", "skill")
 	if _, err := os.Stat(skillSrc); err != nil {
@@ -278,28 +278,35 @@ func ApplyBuiltinSkillConfig() {
 	}
 
 	skillsDir := filepath.Join(globalDshHome, "skills")
-	targetSkill := filepath.Join(skillsDir, "trim-cli")
+	srcMeta := readSkillManifest(skillSrc)
+	skillName := srcMeta.Name
+	if skillName == "" {
+		skillName = "fnos"
+	}
+	targetSkill := filepath.Join(skillsDir, skillName)
 
 	if !enabled {
-		if _, err := os.Stat(targetSkill); err == nil {
-			_ = os.RemoveAll(targetSkill)
-			LogInfo("[技能] 飞牛官方 TRIM CLI 技能已移除")
-		}
+		_ = os.RemoveAll(targetSkill)
+		_ = os.RemoveAll(filepath.Join(skillsDir, "trim-cli"))
+		LogInfo("[技能] 飞牛官方内置技能已移除")
 		return
 	}
 
-	// 若已就绪且源目录未更新则跳过重复部署
-	if sInfo, err := os.Stat(filepath.Join(skillSrc, "SKILL.md")); err == nil {
-		if dInfo, err := os.Stat(filepath.Join(targetSkill, "SKILL.md")); err == nil {
-			if !sInfo.ModTime().After(dInfo.ModTime()) {
-				return
-			}
-		}
+	// 清理旧版本遗留目录（如 trim-cli）
+	if skillName != "trim-cli" {
+		_ = os.RemoveAll(filepath.Join(skillsDir, "trim-cli"))
+	}
+
+	dstMeta := readSkillManifest(targetSkill)
+
+	// 若已存在且源版本不高于已部署版本则跳过
+	if dstMeta.Version != "" && CompareSemver(srcMeta.Version, dstMeta.Version) <= 0 {
+		return
 	}
 
 	_ = os.MkdirAll(skillsDir, 0755)
 
-	// 复制技能目录，避免沙箱软链接隔离权限异常
+	// 复制技能目录
 	_ = os.RemoveAll(targetSkill)
 	if err := copyDir(skillSrc, targetSkill); err != nil {
 		LogError("[技能] 复制技能文件失败: %v", err)
@@ -314,7 +321,29 @@ func ApplyBuiltinSkillConfig() {
 		}
 	}
 
-	LogInfo("[技能] 飞牛官方 TRIM CLI 技能已同步")
+	if dstMeta.Version == "" {
+		LogInfo("[技能] 飞牛官方内置技能已部署: %s (v%s)", skillName, srcMeta.Version)
+	} else {
+		LogInfo("[技能] 飞牛官方内置技能已升级: %s (v%s → v%s)", skillName, dstMeta.Version, srcMeta.Version)
+	}
+}
+
+type skillManifest struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// readSkillManifest 读取技能目录 manifest.json 中的元数据
+func readSkillManifest(dir string) skillManifest {
+	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return skillManifest{}
+	}
+	var m skillManifest
+	_ = json.Unmarshal(data, &m)
+	m.Name = strings.TrimSpace(m.Name)
+	m.Version = strings.TrimSpace(m.Version)
+	return m
 }
 
 // copyFile 复制单个文件并保留权限

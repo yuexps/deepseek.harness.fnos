@@ -7,7 +7,7 @@ description: 管理网络相关开关，当前覆盖 SSH 服务开关
 
 ## 什么时候看这个 skill
 
-- 需要开启或关闭 TRIM NAS / fnOS 的 SSH 服务
+- 需要开启或关闭 fnOS 的 SSH 服务
 - 需要确认网络类写操作的确认参数和风险
 
 ## 先看哪里

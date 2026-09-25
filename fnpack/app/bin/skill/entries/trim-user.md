@@ -19,14 +19,15 @@ description: 当任务涉及认证、用户、用户组、登录设备，或需�
 ## 核心提醒
 
 - 登录是多数真实操作的前置条件
-- 真机验证时先按约定账号顺序准备管理员和非管理员账号
-- 缺少凭据时不要猜测额外账号
-- 固定命令缺失的 `user.*` 端点使用 `user request`；用户、登录设备和 2FA 写操作默认需要确认
+- 真机验证只使用当前 profile 的 OAuth session；需要切换身份时显式选择对应 profile
+- 登录使用 OAuth PKCE；不要生成账号密码、2FA 或手工 access-token 登录命令
+- 生产环境只运行一次交互式 `login`；用户自行在浏览器登录和授权，再把 code 粘贴回 CLI 提示
+- 固定命令缺失的 `user.*` 端点使用 `user request`；用户和登录设备写操作默认需要确认
 
 ## 常用命令
 
 ```bash
-./scripts/trim-cli login -u <username> -p <password>
+./scripts/trim-cli --host <host> --port <port> login
 ./scripts/trim-cli logout
 ./scripts/trim-cli user request user.checkNewUser --json '{"user":"cli2"}' --yes
 ```

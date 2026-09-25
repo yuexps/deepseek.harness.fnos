@@ -15,6 +15,8 @@
 - `app install`、`app update`、`app install-fpk` 可传 `--custom-parameters '<jsonArray>'` 和 `--api-scope '<jsonObject>'`；它们分别对应安装/升级任务的 `customParameters` 和 `systemParameters.apiScope`。如果后端提示需要自定义向导但未提供参数，CLI 会拒绝并提示使用 App Center UI。
 - `app install`、`app update`、`app install-fpk` 可传 `--cancel-on-failure`，当安装或升级任务进入失败状态时，CLI 会尝试调用对应 cancel 接口并把结果写入错误信息。
 - 应用内用户授权路径可用 `app openapi ...` 子命令处理；新增授权路径要求 `--yes` 且路径必须是具体 `/vol...`。
+- 应用入口使用 `app entry list`；当前用户桌面布局使用 `app desktop list`；SAC 应用入口目录使用 `app sac app-store-list`。这些查询走 `appcgi.sac.entry.v1.*` WebSocket CGI，不再使用旧入口 REST。
+- 桌面入口的添加、编辑、删除和排序暂未提供命名命令；如确有需要，使用 `raw` 调用对应 CGI，并按写操作规则传 `--yes`。
 - `app config set-sys` 会校验常用设置字段；默认安装卷、自动更新时间窗口、云安全策略和布尔字段不合法时会在发请求前拒绝。`autoCreateDesktopIcon` 默认不发送，确认后端兼容时才加 `--allow-desktop-icon-field`。
 - 默认会安装后立即启动；不想启动时传 `--no-start`。
 
@@ -23,6 +25,9 @@
 ```bash
 ./scripts/trim-cli --host <host> --port <port> app list
 ./scripts/trim-cli --host <host> --port <port> app status <appName>
+./scripts/trim-cli --host <host> --port <port> app entry list
+./scripts/trim-cli --host <host> --port <port> app desktop list
+./scripts/trim-cli --host <host> --port <port> app sac app-store-list
 ./scripts/trim-cli --host <host> --port <port> app install <appName> --version <version> --source-id <sourceID> --volume-id <volumeId> --dry-run --yes
 ./scripts/trim-cli --host <host> --port <port> app install <appName> --version <version> --source-id <sourceID> --volume-id <volumeId> --yes
 ./scripts/trim-cli --host <host> --port <port> app install <appName> --version <version> --custom-parameters '[{"key":"port","value":8080}]' --api-scope '{"API.User.FileAccess":true}' --volume-id <volumeId> --yes

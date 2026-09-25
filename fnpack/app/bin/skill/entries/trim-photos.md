@@ -5,7 +5,7 @@ description: 当任务涉及相册目录、搜索照片、照片详情、缩略�
 
 # trim-photos
 
-Photos 命令复用当前 fnOS 登录 session，但会自动使用 Photos 自己的接口签名。
+Photos 命令复用当前 profile 的系统 OAuth session，通过代理调用 Photos 原生 HTTP API。
 
 ## 常用命令
 
@@ -20,7 +20,7 @@ trim-cli photos preview <photoId> --size o --open
 
 ## 关键规则
 
-- 使用前先执行普通 `login`，Photos 不需要额外登录。
+- 使用前先执行 OAuth `login`，Photos 不需要额外应用登录或独立签名。
 - `--filter` 和 `--exclude-filter` 使用 `name=value`，可以重复传入。
 - 预览尺寸支持 `xxs`、`xs`、`s`、`m`、`o`，其中 `o` 是原图。
 - 返回的预览 URL 是绝对地址，但浏览器仍需有已登录 fnOS 的 cookie。

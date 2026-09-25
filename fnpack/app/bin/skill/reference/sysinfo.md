@@ -21,7 +21,6 @@
   - `appcgi.sysinfo.getUnixTime`
   - `appcgi.sysinfo.getBootOnPowerFlag`
   - `appcgi.sysinfo.getHardwareInfo`
-  - `appcgi.sysinfo.getFirmwareChecksum`
   - `appcgi.sysinfo.getReservedPartition`
   - `appcgi.sysinfo.isTrimMachine`
   - `appcgi.sysinfo.getTrimMachineFeature`
@@ -100,7 +99,6 @@ CLI 行为：
 | `trim-cli system unix-time` | `appcgi.sysinfo.getUnixTime` | 无 | 系统 Unix 时间 |
 | `trim-cli system boot-on-power` | `appcgi.sysinfo.getBootOnPowerFlag` | 无 | 通电启动标记 |
 | `trim-cli system hardware` | `appcgi.sysinfo.getHardwareInfo` | 无 | 硬件信息 |
-| `trim-cli system firmware-checksum` | `appcgi.sysinfo.getFirmwareChecksum` | 无 | 固件校验信息 |
 | `trim-cli system reserved-partition` | `appcgi.sysinfo.getReservedPartition` | 无 | 预留分区信息 |
 | `trim-cli system is-trim-machine` | `appcgi.sysinfo.isTrimMachine` | 无 | 是否为 TRIM 机器 |
 | `trim-cli system trim-feature` | `appcgi.sysinfo.getTrimMachineFeature` | 无 | 机器能力特性 |
@@ -130,4 +128,6 @@ CLI 行为：
 ## 注意事项
 - 返回数据的具体字段结构可能因 NAS 机型和固件版本而异。
 - 当前固定子命令均为读取型查询。
+- 定时开关机功能依赖设备声明的硬件能力。`system power-plan` 收到成功但没有 `data` 的响应时输出 `{"plan":[]}`，与空计划列表一致；空列表不表示硬件支持定时开机。其他系统查询仍会拒绝缺少 `data` 的响应。
+- `errno 100060031` 表示该功能仅受官方硬件支持，CLI 会显示英文提示 `this feature is supported only on official hardware`。`boot-on-power`、`trim-disk`、`power-on-seconds` 等硬件相关查询可能返回该错误。
 - 电源计划、主机名、时间设置和风扇模式的配置端点尚未作为固定命令实现；如需调用，应通过 `system request` 并确认风险。

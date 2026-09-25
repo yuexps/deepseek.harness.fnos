@@ -1,17 +1,15 @@
 # DeepSeek Harness 反向代理与网关适配技术文档
 
-本文档记录在飞牛 NAS 系统中适配 **DeepSeek Harness (DSH)** 反向代理与网关子路径时的技术方案与实现细节，供维护与版本升级参考。
+本文档记录适配最新版 **DeepSeek Harness (DSH v0.1.7+)** 反向代理与网关子路径的技术方案与实现细节。
 
 ---
 
 ## 一、设计原则
 
-1. **零侵入**：不修改 DSH 官方 NPM 运行时（`@deepseek-ai/dsh`），保持上游代码纯净，便于后续直接升级；
-2. **多模式支持**：
-   - **飞牛网关模式**：子路径代理（`http://<NAS_IP>:5666/app/deepseek-harness/fngateway/`）；
-   - **独立代理模式**：独立端口（`http://<NAS_IP>:2299/`）；
-   - **本地回环模式**：本地调试（`http://127.0.0.1:2298/`）；
-3. **内聚收敛**：所有适配逻辑由 Go 代理服务层（[`proxy.go`](./proxy.go)、[`fngateway.go`](./fngateway.go)、[`harness.go`](./harness.go)）处理。
+1. **前缀剥离反代**：遵循官方前缀剥离代理规范，配合前端原生 `<base href="./">` 解析相对路径；
+2. **零侵入上游**：不修改官方 NPM 运行时（`@deepseek-ai/dsh`），保持上游纯净；
+3. **多入口适配**：统一支持飞牛网关子路径（`/app/deepseek-harness/fngateway/`）、独立反代端口（`:2299`）与本地回环（`:2298`）；
+4. **统一收敛**：所有标头改写、会话代持与补丁注入统一在 Go 代理层（`proxy.go`、`fngateway.go`、`config.go`）处理。
 
 ---
 
@@ -19,21 +17,21 @@
 
 | 序号 | 现象 / 问题 | 根本原因 | 解决方案 | 涉及文件 |
 | :--- | :--- | :--- | :--- | :--- |
-| **1** | 特权 API（配置读写、模型发现等）返回 **403 Forbidden** | 后端通过 `isTrustedApiRequest` 校验请求头，仅允许来自本地回环且同源的请求 | 在反向代理 `Rewrite` 阶段将请求头改写为目标同源 `Host`、`Origin`，并将 `Sec-Fetch-Site` 设为 `same-origin` | `proxy.go`<br>`fngateway.go` |
-| **2** | 飞牛网关子路径下静态资源与接口 **404** | 前端基于根路径 `/` 构建，子路径环境下静态标签、动态请求及 WebSocket 未携带网关前缀 | 1. 代理响应 HTML 时正则替换静态属性（`src`/`href`）；<br>2. 注入网关桥接脚本拦截 `fetch`、`XHR`、`WebSocket`（含 `/api/remote.mux`）、DOM 插入等动态请求 | `fngateway.go` |
-| **3** | HTTP 局域网访问报错 `randomUUID is not a function` | 浏览器限制 `crypto.randomUUID()` 仅在安全上下文（HTTPS/localhost）可用，普通 HTTP 局域网 IP 缺失该 API | 在 HTML 头部注入基于 RFC4122 v4 的纯 JS UUID 生成器作为兜底 polyfill | `proxy.go`<br>`fngateway.go` |
-| **4** | 远程访问下「插件配置」面板空白、模型设置无法读取保存 | 前端 `@deepseek-ai/dsh-client-connection` 依据 `location.hostname` 判定 `isLoopback`；非回环 IP 时进入 memory 模式并拒绝向后端请求配置 | 页面注入 `window.__DSH_TRANSPORT__ = { ownsHost: true }`，走通官方原生特权分支（使 `isLoopback` 判定为 `true`） | `proxy.go`<br>`fngateway.go` |
-| **5** | 页面右上角显示红字“无法打开配置文件” | 该按钮尝试调用宿主机图形界面编辑器（如 Linux 下的 `xdg-open`），在 NAS 无头（Headless）环境下必然失败并报错 | 注入 CSS 样式 `<style>[data-slot="settings.action"] { display: none !important; }</style>` 隐藏该按钮 | `proxy.go`<br>`fngateway.go` |
-| **6** | 会话头部出现“在 Zed 中打开”等桌面应用分体按钮 | 上游新增 `open-in-app` 功能；后台无 SSH 标记时，后端探测本地已安装应用并向前端下发列表 | 全局环境初始化 `InitAppEnv()` 注入 `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 22`，触发官方远程环境判定，自动隐藏该桌面按钮 | `config.go` |
-| **7** | 移动端 App 提示鉴权失效或报错 `HTML did not preload client.js` | 1. 官方 Cookie 为 `SameSite=Strict`，部分移动端 WebView 无法携带凭据导致 401；<br>2. HTML 无防缓存头，导致 WebView 强缓存旧 `rev` 版本资源；<br>3. 移动端网络栈可能折叠 `/plugins/??` 连续问号引发 404 | 1. **服务端代持会话**：反代层捕获 Token 向回环换票并由 Go 内存代持，转发自动注入官方 Cookie；<br>2. **禁用强缓存**：HTML 响应强制写入 `Cache-Control: no-store`；<br>3. **问号还原**：转发前自动补齐被折叠的首个问号 | `harness.go`<br>`proxy.go`<br>`fngateway.go` |
-| **8** | 飞牛网关子路径下上传附件失败（报 404） | 客户端 `@deepseek-ai/dsh-client-file-upload` 使用 `new URL('/api/...', location.origin)` 拼接地址导致脱落网关子路径前缀；且默认在独立 Web Worker 中发送，绕过了主线程网络拦截 | 注入上游官方原生预留的 `window.__DSH_FILE_UPLOAD__ = { fetch: ... }` 契约，补齐网关前缀并统一由主线程代理管道发送 | `fngateway.go` |
+| **1** | 特权 API（配置读写、模型发现）报 **403 Forbidden** | 后端仅允许来自本地回环且同源的请求 | `Rewrite` 阶段重写 `Host`、`Origin` 为后端回环地址，设置 `Sec-Fetch-Site: same-origin` | `proxy.go`<br>`fngateway.go` |
+| **2** | 网关裸路径（`/fngateway`）访问导致静态资源及 API **404** | 未带斜杠时 `<base href="./">` 会导致浏览器基准目录上升至父级 | 增加末尾斜杠强制规范化，访问 `/fngateway` 自动 301 重定向至 `/fngateway/` | `fngateway.go` |
+| **3** | HTTP 局域网访问报错 `randomUUID is not a function` | 浏览器限制 `crypto.randomUUID()` 仅在安全上下文可用 | 上游原生已改用全环境兼容的 `crypto.getRandomValues`，代理层无需注入 polyfill | 上游源码 |
+| **4** | 远程访问下插件配置面板空白、无法读取保存设置 | 前端仅当回环地址时才向后端请求配置，非回环默认降级为 memory 模式 | 注入 `window.__DSH_TRANSPORT__ = { ownsHost: true }`，启用原生宿主特权分支 | `proxy.go`<br>`fngateway.go` |
+| **5** | 页面右上角常驻红字报错“无法打开配置文件” | 前端尝试调用无头（Headless）环境缺失的图形化桌面编辑器（`xdg-open`） | 注入 CSS 隐藏该按钮：`[data-slot="settings.action"] { display: none !important; }` | `proxy.go`<br>`fngateway.go` |
+| **6** | 会话头部出现桌面应用分体按钮（如“在 Zed 中打开”） | 后端未检测到 SSH 环境变量时向前端下发本地已安装桌面应用列表 | `InitAppEnv()` 注入 `SSH_CONNECTION="127.0.0.1 0 127.0.0.1 22"`，标记为远程无头环境 | `config.go` |
+| **7** | 移动端 App 提示鉴权失效或报错 `HTML did not preload client.js` | 移动端 WebView 无法自动携带 Strict Cookie、无防缓存头导致缓存旧资源、连续问号折叠 | 1. 服务端代持 `dsh-auth-*` Cookie 并自动注入转发；<br>2. HTML 响应强制 `Cache-Control: no-store`；<br>3. 转发前自动还原 `/plugins/?/` 为 `/plugins/??/` | `harness.go`<br>`proxy.go`<br>`fngateway.go` |
+| **8** | 子路径下附件上传与 WebSocket 连接脱落前缀 | 旧版本采用绝对路径拼接导致脱落挂载前缀 | 上游原生基于 `document.baseURI` 解析，代理层保持前缀剥离与 Cookie Path 改写即可 | `fngateway.go` |
 
 ---
 
 ## 三、核心技术实现细节
 
-### 1. 反向代理标头伪装与上下文配置
-在 [`proxy.go`](./proxy.go) 中改写目标标头以通过 DSH 本地特权校验，并关闭代理层压缩以支持响应体改写：
+### 1. 反向代理标头改写
+改写请求标头通过 DSH 本地特权校验，并关闭代理层压缩以支持 HTML 注入：
 ```go
 pr.Out.Header.Set("Host", targetURL.Host)
 pr.Out.Header.Set("Origin", "http://"+targetURL.Host)
@@ -41,77 +39,59 @@ pr.Out.Header.Set("Sec-Fetch-Site", "same-origin")
 pr.Out.Header.Set("Accept-Encoding", "identity")
 ```
 
-### 2. 客户端原生特权契约声明（ownsHost）
-DSH 上游 `@deepseek-ai/dsh-client-connection` 提供了针对嵌入式宿主的声明字段：
-```typescript
-// 上游计算逻辑
-isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)
-```
-通过在 HTML 头部注入以下代码，直接启用特权模式以读取和保存配置：
-```javascript
-try {
-  window.__DSH_TRANSPORT__ = Object.assign(window.__DSH_TRANSPORT__ || {}, { ownsHost: true });
-} catch (_) {}
-```
-
-### 3. 子路径网关路由桥接（fngateway.go）
-在飞牛网关子路径反代环境下，通过前置脚本对前端网络与 DOM 环境进行路径适配：
-- **基准路径**：注入 `<base href="...">` 规范相对路径解析；
-- **路由与跳转**：拦截 `location.pathname` 读写及 `history.pushState` / `replaceState`，避免单页路由跳出网关前缀；
-- **网络请求**：改写 `fetch`、`XMLHttpRequest.prototype.open`、`WebSocket`（含 `/api/remote.mux`）及 `EventSource` 请求路径；
-- **DOM 资源**：拦截动态插入的 `<script>`、`<img>`、`<link>` 等标签路径，适配动态加载模块；
-- **PWA 清单**：重写 `manifest.webmanifest` 中的 `scope` 与 `start_url`。
-
-### 4. 附件上传网关子路径适配（__DSH_FILE_UPLOAD__）
-官方 `@deepseek-ai/dsh-client-file-upload` 在页面载体扩展中预留了 `__DSH_FILE_UPLOAD__` 钩子：
-```typescript
-const hook = (globalThis as ClientFileUploadGlobal).__DSH_FILE_UPLOAD__
-this.transport = hook === undefined ? workerTransport() : customTransport(hook.fetch)
-```
-通过前置注入该官方钩子，将原本在独立 Web Worker 内发送的请求收敛回页面主线程，自动通过 `toGatewayUrl` 补齐网关前缀并携带凭据：
-```javascript
-targetWindow.__DSH_FILE_UPLOAD__ = {
-  fetch: function (inputUrl, init) {
-    var mapped = toGatewayUrl(inputUrl);
-    var finalInit = init || {};
-    if (!finalInit.credentials) finalInit.credentials = "include";
-    return targetWindow.fetch(mapped !== null ? mapped.toString() : inputUrl, finalInit);
-  }
-};
+### 2. 裸路径末尾斜杠强制规范化
+确保单页应用基准路径解析正确：
+```go
+if c.Request.URL.Path == fnGatewayPrefix {
+	target := fnGatewayPrefix + "/"
+	if c.Request.URL.RawQuery != "" {
+		target += "?" + c.Request.URL.RawQuery
+	}
+	c.Redirect(http.StatusMovedPermanently, target)
+	return
+}
 ```
 
-### 5. 无头桌面控件适配
-- **隐藏打开配置文件按钮**：
-  ```html
-  <style>[data-slot="settings.action"] { display: none !important; }</style>
-  ```
-- **注入远程环境标记**：
-  在 `config.go` 初始化中设置环境变量：
-  ```go
-  _ = os.Setenv("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22")
-  ```
-  使 DSH 将运行上下文识别为远程环境，关闭桌面应用打开（`open-in-app`）及图形弹窗选择器。
+### 3. 统一补丁注入（httpPolyfillScript）
+向 HTML 注入纯净轻量的样式与特权声明（共 1 行）：
+```html
+<style>[data-slot="settings.action"] { display: none !important; }</style><script>try{window.__DSH_TRANSPORT__=Object.assign(window.__DSH_TRANSPORT__||{},{ownsHost:true});}catch(_){}</script>
+```
 
-### 6. 服务端会话代持与契约容错
-针对移动端 WebView 的环境差异提供稳定性保障：
-- **会话代持**：反向代理捕获客户端的登录 Token 后，直接在 Go 服务端内存中换取并持有 `dsh-auth-*` Cookie，转发至上游时统一注入，解除对客户端 Cookie 存储能力的依赖；
-- **禁用 HTML 缓存**：响应头强制设置 `Cache-Control: no-store, no-cache, must-revalidate`，避免前端加载失效的旧版本资产；
-- **URL 问号还原**：对请求路径形如 `/plugins/?/...` 的请求自动还原为 `/plugins/??/...`，保障上游模块打包器路由匹配。
+### 4. 远程环境标记注入
+在 [`config.go`](./config.go) 初始化中注入环境变量，使后端自动关闭桌面探测并降级为 Web 选择器：
+```go
+_ = os.Setenv("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 22")
+```
+
+### 5. 服务端会话代持与契约容错
+- **会话代持**：捕获客户端 Token，由 Go 服务端直接换取并持有 `dsh-auth-*` Cookie，转发至上游时统一补齐；
+- **禁用缓存**：HTML 响应头强制设置 `Cache-Control: no-store, no-cache, must-revalidate`；
+- **问号还原**：对形如 `/plugins/?/...` 请求还原为 `/plugins/??/...`；
+- **Cookie Path 改写**：网关模式下通过正则将 `Path=/` 改写为 `Path=/app/deepseek-harness/fngateway/`。
 
 ---
 
 ## 四、排查与验证方法
 
-### 1. 验证设置与特权 API 状态
-在浏览器控制台执行以下请求，若返回配置信息且 `ok: true`，说明特权通道已正常打通：
+### 1. 验证特权 API 状态
+在控制台验证特权通道是否打通（应返回配置信息且 `ok: true`）：
 ```javascript
-fetch('/api/settings.describe', {
+fetch('api/settings.describe', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ type: 'client-request', rpcId: 'test', method: 'settings.describe', payload: {} })
 }).then(r => r.json()).then(console.log);
 ```
 
-### 2. 上游升级排查要点
-- 更新 DSH 核心包时，无需重新构建前端代码；
-- 若配置面板或接口异常，优先确认上游 `ownsHost` 声明字段及 RPC 路由是否有破坏性变更。
+### 2. 验证基准路径与 WebSocket
+- 检查基准路径（应包含网关完整前缀）：
+  ```javascript
+  console.log('Document Base URI:', document.baseURI);
+  ```
+- 检查网络面板 `/api/remote.mux` WebSocket 连接，状态应为 `101 Switching Protocols`。
+
+### 3. 上游升级排查要点
+- 更新 DSH 核心包无需重新编译前端；
+- 确认上游 `ownsHost` 声明字段及 RPC 路由无破坏性变更；
+- 确保代理层继续保持裸路径末尾斜杠重定向规范化。

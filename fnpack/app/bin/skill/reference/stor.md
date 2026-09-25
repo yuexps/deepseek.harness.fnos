@@ -122,6 +122,11 @@ trim-cli storage pools
 - 可能是多阶段响应：先返回基础池列表，后续跟进已移除磁盘/热备/缓存详情。
 - 在线管理员可能收到 `{"sysNotify":"storageChanged"}` 通知，此时应刷新输出。
 
+#### Field Semantics
+- `degraded`、`fixNeedDisks` 已在部分固件的存储池响应中出现，但字段精确语义和跨固件一致性尚未确认，不能仅凭非零值断言磁盘故障、必须修复或数据风险等级。
+- SMART、`md[].arrayState`、`md[].syncAction` 可作为相邻证据，但现有资料不足以确定它们与上述字段的组合关系；应保留原始值并在 fnOS 存储页核对。
+- CLI 只透传这些字段，不会自动解释或执行修复。
+
 ### stor.listDisk
 
 #### Endpoint
@@ -134,6 +139,10 @@ trim-cli storage pools
 ```
 trim-cli storage disks
 ```
+
+#### Protocol Notes
+- 该端点可能先返回磁盘数据帧，再返回成功终态；CLI 会收集所有帧中的 `disk` 数组，并按 `name` 合并重复磁盘。
+- 如果所有帧均不含磁盘数据，输出包含空的 `disk` 数组。
 
 #### Field Semantics
 - 返回的磁盘标识是 `stor.diskHealth`、`stor.diskSmart`、`stor.format` 和 `stor.eject` 使用的 canonical 磁盘名。
@@ -252,10 +261,14 @@ trim-cli storage smart <disk>
 | --- | --- | --- | --- | --- | --- | --- |
 | `req` | body | yes | string | Endpoint selector | `stor.diskHealth` 或 `stor.diskSmart` | `stor.diskHealth` |
 | `reqid` | body | yes | string | Request correlation ID | Generated per request | `69ba...` |
-| `disk` | body | yes | string | 磁盘设备名 | 纯设备名如 `sdb`、`nvme0n1` | `sdb` |
+| `disks` | body | yes | string[] | `stor.diskHealth` 的磁盘设备名列表 | CLI 单盘命令会发送为单元素数组 | `["nvme0n1"]` |
+| `disk` | body | yes | string | `stor.diskSmart` 的磁盘设备名 | CLI 发送纯设备名 | `nvme0n1` |
+| `wakeup` | body | no | boolean | 查询前唤醒磁盘 | `diskHealth` 发送 `true`；`diskSmart` 使用设备默认值 | `true` |
 
 #### Protocol Notes
 - `stor.diskSmart` 在磁盘休眠时可能返回 `diskStandby` 标记而非完整 SMART 数据。
+- `listDisk` 会聚合终态前的数据帧；列表确实为空时输出 `disk: []`。`listFreeDisk` 成功但无候选项时补 `disk: []`，`listRemovable` 成功但无设备时补 `removable: []`。
+- `diskHealth` 使用 `disks` 数组；`diskSmart` 仍使用单数 `disk`。
 
 ### stor.create
 

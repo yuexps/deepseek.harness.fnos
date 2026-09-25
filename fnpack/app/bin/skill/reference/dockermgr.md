@@ -16,16 +16,19 @@ Docker 管理模块，涵盖 Docker 镜像、容器、网络、Compose 项目和
 | --- | --- | --- |
 | 看 Docker 总体状态 | `trim-cli docker stats` | 适合作为进入 Docker 模块的只读探测 |
 | 看镜像 | `trim-cli docker image ls` / `inspect` | 需要镜像详情时再下钻 inspect |
-| 拉镜像 | `trim-cli docker image pull <imageRef>` | 长耗时操作，执行后应重新确认状态 |
-| 看容器 | `trim-cli docker container ls` / `inspect` / `stats` / `top` | 先观察状态，再决定启停或删除 |
+| 拉镜像 | `trim-cli docker image pull <imageRef> --yes` | 长耗时写操作，执行后应重新确认状态 |
+| 看容器 | `trim-cli docker container ls [--all]` / `inspect` / `stats` / `top` | `ls` 默认只列运行中容器；停止或创建态容器需要 `--all` |
 | 启停、重启、强杀、删除容器 | `start/stop/restart/kill/rm` | 变更前建议先 inspect 或 ls |
 | 看 Compose 项目 | `trim-cli docker compose ls` | 目前优先作为只读入口 |
 
 ## 常见误判
 
 - `docker stats` 是聚合统计，不是单容器统计
+- `docker container ls` 默认不包含 stopped/created 容器；判断容器是否消失时使用 `docker container ls --all` 或按 ID 执行 `inspect`
+- 列表接口成功但省略 `data` 时，只能确认请求成功，不能据此断言资源数量为 0；CLI 会保留原始成功信封，避免把后端漏字段伪装成空列表
 - `image pull`、`container stop`、`container restart` 这类操作可能明显长于普通读请求
-- `container rm` 默认需要确认；`--force` 和 `--yes` 不是同一个概念
+- `image pull` 与 `container create/update/start/stop/restart/kill` 必须显式传 `--yes`；删除命令可交互确认，但 Agent 或非交互流程也应传 `--yes`。`--force` 和 `--yes` 不是同一个概念
+- `container update` 可能返回新 ID；CLI 会先 inspect 返回的 ID，确认本次资源字段已生效且网络配置未丢失后再报告成功。旧固件不返回 ID 时，CLI 会对原 ID 执行相同回查。后续操作使用命令输出的 ID
 - 镜像引用和容器 ID 不是同一类标识，不要混传
 
 ## 高风险提醒
@@ -81,7 +84,7 @@ Docker 管理模块，涵盖 Docker 镜像、容器、网络、Compose 项目和
 trim-cli docker request appcgi.dockermgr.<name> --json '<object>' --yes
 ```
 
-`--json` 必须是 JSON object，不能包含 `req` 或 `reqid`。默认需要确认；Docker system、network、Compose 和镜像导入导出类操作可能影响运行中服务，自动化调用前应先执行只读探测。
+`--json` 必须是 JSON object，不能包含 `req` 或 `reqid`。泛化请求必须显式传 `--yes`，缺失时 CLI 会在读取 session 或访问网络前直接拒绝，不会进入交互提示；Docker system、network、Compose 和镜像导入导出类操作可能影响运行中服务，调用前应先执行只读探测。
 
 ## 端点详情
 
@@ -95,7 +98,7 @@ trim-cli docker request appcgi.dockermgr.<name> --json '<object>' --yes
 
 #### Trim CLI Mapping
 ```
-trim-cli docker container ls
+trim-cli docker container ls [--all]
 ```
 
 #### Request
@@ -103,6 +106,7 @@ trim-cli docker container ls
 | --- | --- | --- | --- | --- | --- | --- |
 | `req` | body | yes | string | Endpoint selector | Fixed value | `appcgi.dockermgr.containerList` |
 | `reqid` | body | yes | string | Request correlation ID | Generated per request | `69ba...` |
+| `all` | body | no | boolean | 是否包含停止和创建态容器 | 仅 `--all` 时发送 `true`；默认只列运行中容器 | `true` |
 
 #### Response
 | Field | Always Present | Type | Meaning | Conditions / Notes | Example |
@@ -115,6 +119,7 @@ trim-cli docker container ls
 #### Protocol Notes
 - 签名请求（当 session secret 可用时）。
 - 历史名称别名：`dockermgr.containerList`。
+- 判断容器在 update/stop 后是否仍存在时，使用 `--all` 或 `container inspect <id>`，不要仅凭默认列表下结论。
 
 ### appcgi.dockermgr.stats
 
@@ -149,7 +154,7 @@ trim-cli docker stats
 #### Trim CLI Mapping
 ```
 trim-cli docker image ls
-trim-cli docker image pull <imageRef>
+trim-cli docker image pull <imageRef> --yes
 trim-cli docker image inspect <imageRef>
 trim-cli docker image rm <imageRef> [--force] [--yes]
 ```
@@ -179,14 +184,15 @@ trim-cli docker image rm <imageRef> [--force] [--yes]
 
 #### Trim CLI Mapping
 ```
-trim-cli docker container create --image <imageRef> [--name <name>] [--start] [--restart] [--memory <mb>] [--cpu <shares>] [--env <key=value>] [--cmd <arg>] [--port <host:container[/proto]>] [--mount <source:target[:ro|rw]>]
+trim-cli docker container create --image <imageRef> [--name <name>] [--start] [--restart] [--memory <mb>] [--cpu <shares>] [--env <key=value>] [--cmd <arg>] [--port <host:container[/proto]>] [--mount <source:target[:ro|rw]>] --yes
+trim-cli docker container update <containerId> [--restart] [--memory <mb>] [--cpu <shares>] --yes
 trim-cli docker container inspect <containerId>
 trim-cli docker container top <containerId>
 trim-cli docker container stats <containerId>
-trim-cli docker container start <containerId>
-trim-cli docker container stop <containerId>
-trim-cli docker container restart <containerId>
-trim-cli docker container kill <containerId>
+trim-cli docker container start <containerId> --yes
+trim-cli docker container stop <containerId> --yes
+trim-cli docker container restart <containerId> --yes
+trim-cli docker container kill <containerId> --yes
 trim-cli docker container rm <containerId> [--force] [--yes]
 ```
 
@@ -204,10 +210,15 @@ trim-cli docker container rm <containerId> [--force] [--yes]
 - `--port <host:container[/proto]>` 可重复，映射到 `port[]`；协议默认 `tcp`
 - `--mount <source:target[:ro|rw]>` 可重复，映射到 `mount[]`；权限默认 `rw`
 - 默认值：`restart=false`、`privileged=false`、`net=['bridge']`、`cpu=0`、`memory=0`
+- `create/update/start/stop/restart/kill` 必须显式传 `--yes`；`rm` 可交互确认，但 Agent 或非交互流程应传 `--yes`。
+
+**containerModify：** CLI 先读取完整容器配置，将资源变更合并到当前配置后提交。若响应带 `rsp.id`，CLI 会 inspect 该 ID，并核对 `name/image/restart/privileged/gpuEnabled/cpu/memory/env/cmd/capAdd/capDrop/link/mount/port/networks`；全部字段与提交配置一致后才报告成功，其中集合字段按无序内容比较，网络还会核对名称及静态地址。若旧固件省略 `rsp.id`，则对原 ID 执行相同回查。
 
 **containerCreate 成功响应**可能为顶层 `rsp` 对象（Docker 风格大写 key，如 `{"Id":"abcd","Warnings":[]}`），而不是嵌套在 `data.rsp` 中。
 
 **containerInspect/top/stats/start/stop/restart/kill：** 通过 `containerId` 标识。
+
+`container top` 需要目标容器处于运行状态。CLI 会先 inspect；当 `State.Running=false` 时在本地返回明确提示，不再发送会产生设备 errno 的 top 请求。
 
 **containerRemove：** 通过 `containerId` 标识；`force` 仅在 `--force` 时发送；默认要求确认，`--yes` 跳过。
 

@@ -84,7 +84,7 @@ trim-cli logger modules [--locale <locale>]
 
 #### Trim CLI Mapping
 ```
-trim-cli logger clear --level <level> --module <module>
+trim-cli logger clear --level <level> --module <module> --yes
 ```
 
 #### Request
@@ -105,7 +105,7 @@ trim-cli logger clear --level <level> --module <module>
 
 #### Trim CLI Mapping
 ```
-trim-cli logger export --level <level> --module <module> [--locale <locale>]
+trim-cli logger export --level <level> --module <module> [--locale <locale>] --yes
 ```
 
 #### Request
@@ -127,7 +127,7 @@ trim-cli logger export --level <level> --module <module> [--locale <locale>]
 
 #### Trim CLI Mapping
 ```
-trim-cli logger archive set --switch <0|1> --file-path <path> [--size-gt <n>] [--date-unit <n>] [--date-before <n>]
+trim-cli logger archive set --switch <0|1> --file-path <path> [--size-gt <n>] [--date-unit <n>] [--date-before <n>] --yes
 ```
 
 #### Request
@@ -172,8 +172,8 @@ trim-cli logger archive query
 
 #### Trim CLI Mapping
 ```
-trim-cli logger debuglog copy-start --output-dir <path> [--srv-type <0|1|2>]...
-trim-cli diagnostic-log export --output-dir <path> [--srv-type <0|1|2>]...
+trim-cli logger debuglog copy-start --output-dir <path> [--srv-type <0|1|2>]... --yes
+trim-cli diagnostic-log export --output-dir <path> [--srv-type <0|1|2>]... --yes
 ```
 
 #### Request
@@ -208,8 +208,8 @@ trim-cli diagnostic-log export --output-dir <path> [--srv-type <0|1|2>]...
 
 #### Trim CLI Mapping
 ```
-trim-cli logger debuglog copy-stop --task-id <taskId>
-trim-cli diagnostic-log stop --task-id <taskId>
+trim-cli logger debuglog copy-stop --task-id <taskId> --yes
+trim-cli diagnostic-log stop --task-id <taskId> --yes
 ```
 
 #### Request

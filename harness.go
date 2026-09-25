@@ -551,7 +551,9 @@ func stopAndWait() {
 			SetCurrentLaunchToken("")
 		}
 		procMu.Unlock()
-		state.SetStatus(StatusStopped, "")
+		if state.Status() != StatusBuilding && state.Status() != StatusSnapshotting {
+			state.SetStatus(StatusStopped, "")
+		}
 	}
 }
 

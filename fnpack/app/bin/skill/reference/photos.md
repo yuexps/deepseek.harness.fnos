@@ -2,9 +2,9 @@
 
 ## Authentication
 
-Photos 使用当前 profile 的 fnOS session token，并自动添加 Photos API 签名。当前命令目标
-必须与该 profile 保存的 session 目标一致。没有有效 session 时先执行普通 `login`；
-Photos 不需要额外登录。
+Photos 使用当前 profile 的系统 access token，通过 `/ogh/ac/h/*uri` 调用原生 HTTP API。当前命令目标
+必须与该 profile 保存的 session 目标一致。没有有效 session 时先执行 OAuth `login`；Photos
+不需要额外的应用登录或独立签名。
 
 ## Command index
 

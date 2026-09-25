@@ -19,18 +19,22 @@
 | 搜当前用户目录下的文件 | `trim-cli file search <key>` | CLI 会先探测再推导当前用户目录 |
 | 在显式路径下搜索 | `trim-cli file search <key> /vol{v}/...` | 每个路径都必须是 canonical 路径 |
 | 搜别人共享给当前用户的文件 | `trim-cli file search-others <key>` | 这是 finder 搜索，不是共享目录列表 |
-| 列目录、统计空间、查看访问权限 | `file ls-dir/calc/access <path>` | 只接受具体 `/vol{v}/...` 路径，`ls-dir` 也可不传路径 |
+| 列目录、统计路径、查看访问权限 | `file ls-dir/calc/access <path>` | `calc`、`access` 只接受具体 `/vol{v}/...` 路径，`ls-dir` 也可不传路径 |
+| 统计卷空间分类 | `trim-cli file usage <vol>` | `vol` 是存储空间 ID；CLI 汇总全部分段响应 |
+| 检查目录内的额外挂载点 | `trim-cli file is-mount-point <path>` | `hasMount=false` 表示该目录及子目录没有额外挂载点，不表示所在存储卷未挂载 |
 | 看文件属性、大小或下载 URL | `file prop/size/download-url <path>` | 只接受具体 `/vol{v}/...` 路径 |
 | 看共享目录元数据或列表 | `file share info/list/list-others/admin-list/admin-list-others` | 共享目录与 share link 不是同一语义 |
 | 看 ACL | `trim-cli file acl get <path>` | ACL 查询与共享目录状态不是同一概念 |
 | 设置 ACL 或所有者 | `file acl set` / `file chown` | 权限写操作，需要 `--yes` |
 | 转换或导出 TrimACL 报告 | `file trimacl conv/report` | 权限转换类写操作，需要 `--yes` |
-| 做创建、重命名、删除、复制、移动 | `file mkdir/rename/rm/cp/mv` | 写操作默认要求具体 `/vol{v}/...` 路径；重命名需要 `--yes` |
+| 做创建、重命名、删除、复制、移动 | `file mkdir/rename/rm/cp/mv` | 写操作默认要求具体 `/vol{v}/...` 路径，并需要 `--yes` |
 | 压缩或解压文件 | `file compress/extract` | 写操作，需要 `--yes` |
 | 管理当前用户回收站 | `file trash list/search/restore/clear` | 恢复和清空需要 `--yes` |
-| 管理团队文件和团队回收站 | `file team list/trash-list-trashbin/trash-list/trash-restore/trash-clear` | 恢复和清空需要 `--yes`；清空需要团队卷号和团队目录名 |
-| 上传前检查目标路径 | `trim-cli file check-upload /vol{v}/... <size>` | 只做预检查，不上传文件内容 |
-| 上传单个本地文件 | `trim-cli file upload /vol{v}/... <localFile>` | 远端参数是目录，CLI 会拼接本地文件名 |
+| 管理收藏夹 | `file fav list/add/del` | `add`、`del` 是写操作，必须显式传 `--yes` |
+| 管理团队文件和团队回收站 | `file team list/trash-list-trashbin/trash-list/trash-restore/trash-clear` | `trash-list` 需要团队回收站具体 `path`；无路径时先用 `trash-list-trashbin`；恢复和清空需要 `--yes`，清空需要团队卷号和团队目录名 |
+| 上传前检查目标路径 | `trim-cli file check-upload /vol{v}/... <size> --yes` | 不上传内容，但设备可能创建临时占位 |
+| 上传单个本地文件 | `trim-cli file upload /vol{v}/... <localFile> --yes` | 远端参数是目录，CLI 会拼接本地文件名 |
+| 下载一个或多个文件 | `/multiple-download` HTTP flow | 当前没有命名 CLI 命令；属于平台文件下载服务，不是 Download Center CGI |
 
 如果还没判断清楚该走 `ls`、`search`、`search-others` 还是 `share`，先看 `workflows/file-routing.md`。
 
@@ -74,6 +78,7 @@
 - 上传/下载/压缩：
   - `file.checkUpload`
   - `file upload` CLI `/upload` flow；上传传输跟随当前连接安全策略
+  - `/multiple-download` HTTP flow（当前未实现命名 CLI 命令）
   - `file.download`
   - `file.compress`
   - `file.extract`
@@ -158,6 +163,45 @@ trim-cli file ls /vol{v}/...
 - 非法路径格式在发送请求前被拒绝，提示使用 `/vol{v}/...`。
 - 后端错误通过 `errmsg`/`errno` 传播。
 
+### file.lsDir
+
+#### Purpose
+列出文件管理器目录入口或指定目录。该端点可能分多包返回 `files`。
+
+#### Trim CLI Mapping
+```
+trim-cli file ls-dir
+trim-cli file ls-dir /vol{v}/...
+```
+
+#### Protocol Notes
+- CLI 持续接收响应直至终态包，并把所有中间包的 `files` 合并为一个 JSON 数组。
+- 终态包通常只包含 `result`、`uver` 等元数据，不会作为目录条目输出。
+
+### file.usage
+
+#### Purpose
+按分类查询指定存储空间的容量使用情况。
+
+#### Trim CLI Mapping
+```
+trim-cli file usage <vol>
+```
+
+#### Protocol Notes
+- 接口会分多包推送；每个数据包用 `category` 区分 `user`、`team`、`app`、`docker` 等容量分类。
+- CLI 输出一个 JSON 数组，不包含没有 `category` 的终态包。
+- 同一分类可能重复推送，必须以最后一次为准，不能累加。用户和团队相关分类按 `category + id` 区分，其余分类按 `category` 区分。
+
+### file.fav.add / file.fav.del
+
+```bash
+trim-cli file fav add /vol{v}/... --yes
+trim-cli file fav del /vol{v}/... --yes
+```
+
+两者都会修改当前用户收藏夹，必须显式传 `--yes`。缺失时 CLI 会在读取 session 或访问网络前拒绝。
+
 ### file.mkdir
 
 #### Endpoint
@@ -168,7 +212,7 @@ trim-cli file ls /vol{v}/...
 
 #### Trim CLI Mapping
 ```
-trim-cli file mkdir /vol{v}/...
+trim-cli file mkdir /vol{v}/... --yes
 ```
 
 #### Request
@@ -280,7 +324,7 @@ trim-cli file rename /vol{v}/... <newName> --yes
 
 #### Trim CLI Mapping
 ```
-trim-cli file check-upload /vol{v}/... <size> [--overwrite skip|replace|rename]
+trim-cli file check-upload /vol{v}/... <size> [--overwrite skip|replace|rename] --yes
 ```
 
 #### Request
@@ -305,7 +349,7 @@ trim-cli file check-upload /vol{v}/... <size> [--overwrite skip|replace|rename]
 
 #### Field Semantics
 - `path` 是完整目标文件路径，不是目标目录。
-- `file check-upload` 只做上传前检查，不负责传输文件内容。
+- `file check-upload` 不传输文件内容，但后端可能分配 `.~#n` 临时上传占位，因此仍属于写操作。
 - `--overwrite` 支持 `skip`、`replace`、`rename`，也可传对应数值 `0`、`1`、`2`。
 
 ### file upload CLI flow
@@ -315,7 +359,7 @@ trim-cli file check-upload /vol{v}/... <size> [--overwrite skip|replace|rename]
 
 #### Trim CLI Mapping
 ```
-trim-cli file upload /vol{v}/... <localFile> [--overwrite skip|replace|rename]
+trim-cli file upload /vol{v}/... <localFile> [--overwrite skip|replace|rename] --yes
 ```
 
 #### Flow
@@ -324,8 +368,8 @@ trim-cli file upload /vol{v}/... <localFile> [--overwrite skip|replace|rename]
 3. 调用 `file.checkUpload`。
 4. 如果返回 `skip` 或 `completed`，直接视为成功。
 5. 如果返回 `uploadName`，HTTP `Trim-Path` 使用父目录加该名称；用户可见结果仍是请求的目标路径。
-6. 使用 `POST /upload` 上传 multipart 字段 `trim-upload-file`；本机或显式允许的远端 WS 使用 HTTP，远端默认 WSS 使用 HTTPS。
-7. 20 MiB 及以上文件会缓存 `uploadName` 路径用于后续断点续传；缓存续传遇到 `328496` 会重试，遇到 `4100` 会回退普通检查。
+6. 使用 `POST /upload` 上传 multipart 字段 `trim-upload-file`；本机或显式允许的远端 WS 使用 HTTP，远端默认 HTTPS 使用 HTTPS。
+7. 20 MiB 及以上文件会缓存 `uploadName` 路径用于后续断点续传；缓存按 NAS endpoint、profile、登录用户、远端目标、文件大小、覆盖策略和本地文件 SHA-256 隔离，只有完整匹配时才会续传。同一 NAS endpoint 和远端目标的上传会跨进程串行执行。缓存续传遇到 `328496` 会重试，遇到 `4100` 会回退普通检查。
 
 #### HTTP Headers
 | Header | Required | Meaning |
@@ -335,6 +379,43 @@ trim-cli file upload /vol{v}/... <localFile> [--overwrite skip|replace|rename]
 | `Trim-Overwrite` | yes | `0` skip, `1` replace, `2` rename |
 | `Trim-Mtim` | yes | 本地文件 mtime，Unix 秒 |
 | `Trim-Token` | yes | 当前 session token |
+
+### multiple-download HTTP flow
+
+#### Endpoint
+
+```plaintext
+POST /multiple-download
+GET  /multiple-download?token=<download-token>
+```
+
+#### Purpose
+
+为一个或多个 fnOS 文件/目录创建临时下载链接；单文件可直接下载，多目标通常由平台打包后下载。
+
+#### Request
+
+| Field | Location | Required | Type | Meaning | Example |
+| --- | --- | --- | --- | --- | --- |
+| `accessToken` | POST body | yes | string | Current OAuth access token | `<access-token>` |
+| `paths` | POST body | yes | string[] | 下载目标路径 | `["/vol1/1000/a.txt"]` |
+| `downloadLimit` | POST body | no | number | 当前前端使用的下载/打包限制 | `2` |
+| `noZipWhenSingleFile` | POST body | no | boolean | 单文件不打 zip | `true` |
+| `zipFileName` | POST body | no | string | 下载或压缩包名称 | `a.txt等2个文件` |
+| `token` | GET query | yes | string | POST 返回的临时下载 token | `<download-token>` |
+
+#### Flow
+
+1. 携带 Bearer，并向 `/ogh/ac/h/multiple-download` POST `accessToken` 和 `paths`；成功响应读取临时 `token`。
+2. 携带 Bearer 打开 `GET /ogh/ac/h/multiple-download?token=<download-token>` 获取文件或压缩包字节流。
+3. 可使用 `Range` 请求分段下载，成功时返回 HTTP 206；只有临时 token 而没有 Bearer 时会返回 401。
+4. HTTP 403 时，响应 body 表示首个无权限路径。
+
+#### CLI support
+
+- 当前 Rust CLI 未实现对应命名命令，也不能通过 `download request` 调用，因为它不是 `appcgi.downloadcenter.*` CGI。
+- GET 临时链接仍要求 Bearer，不可当作匿名、免鉴权分享链接。
+- access token 和临时下载 token 都属于敏感凭据，不应记录或转发。
 
 ### file.rm
 
@@ -429,7 +510,7 @@ trim-cli file trash clear --yes
 
 #### Trim CLI Mapping
 ```
-trim-cli file cp <src> <destDir>
+trim-cli file cp <src> <destDir> --yes
 ```
 
 `src` 和 `destDir` 必须都是 `/vol{v}/...` 格式。
@@ -458,7 +539,7 @@ trim-cli file cp <src> <destDir>
 
 #### Trim CLI Mapping
 ```
-trim-cli file mv <src> <destDir>
+trim-cli file mv <src> <destDir> --yes
 ```
 
 `src` 和 `destDir` 必须都是 `/vol{v}/...` 格式。
@@ -626,7 +707,7 @@ trim-cli file share admin-list-others
 
 #### Trim CLI Mapping
 ```
-trim-cli file share add <path> <shareName> --permset <json> [--sub] [--acl-mode <mode>]
+trim-cli file share add <path> <shareName> --permset <json> [--sub] [--acl-mode <mode>] --yes
 ```
 
 #### Request
@@ -653,7 +734,7 @@ trim-cli file share add <path> <shareName> --permset <json> [--sub] [--acl-mode 
 
 #### Trim CLI Mapping
 ```
-trim-cli file share del <path> [--sub] [--acl-mode <mode>]
+trim-cli file share del <path> [--sub] [--acl-mode <mode>] --yes
 ```
 
 #### Request
