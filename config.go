@@ -284,13 +284,19 @@ func ApplyBuiltinSkillConfig() {
 		skillName = "fnos"
 	}
 	targetSkill := filepath.Join(skillsDir, skillName)
+	skillScriptsDir := filepath.Join(targetSkill, "scripts")
 
 	if !enabled {
+		updateSkillPathEnv(skillScriptsDir, false)
 		_ = os.RemoveAll(targetSkill)
 		_ = os.RemoveAll(filepath.Join(skillsDir, "trim-cli"))
 		LogInfo("[技能] 飞牛官方内置技能已移除")
+		broadcastSkillAuth()
 		return
 	}
+
+	updateSkillPathEnv(skillScriptsDir, true)
+	cleanLegacyTrimSession()
 
 	// 清理旧版本遗留目录（如 trim-cli）
 	if skillName != "trim-cli" {
@@ -301,6 +307,7 @@ func ApplyBuiltinSkillConfig() {
 
 	// 若已存在且源版本不高于已部署版本则跳过
 	if dstMeta.Version != "" && CompareSemver(srcMeta.Version, dstMeta.Version) <= 0 {
+		broadcastSkillAuth()
 		return
 	}
 
@@ -326,6 +333,7 @@ func ApplyBuiltinSkillConfig() {
 	} else {
 		LogInfo("[技能] 飞牛官方内置技能已升级: %s (v%s → v%s)", skillName, dstMeta.Version, srcMeta.Version)
 	}
+	broadcastSkillAuth()
 }
 
 type skillManifest struct {
@@ -403,3 +411,41 @@ func copyDir(src, dst string) error {
 	}
 	return nil
 }
+
+// updateSkillPathEnv 根据内置技能启用状态动态更新 PATH 环境变量
+func updateSkillPathEnv(scriptsDir string, enabled bool) {
+	currPath := os.Getenv("PATH")
+	parts := strings.Split(currPath, ":")
+	var newParts []string
+	for _, p := range parts {
+		if p != "" && p != scriptsDir {
+			newParts = append(newParts, p)
+		}
+	}
+	if enabled && scriptsDir != "" {
+		newParts = append([]string{scriptsDir}, newParts...)
+	}
+	_ = os.Setenv("PATH", strings.Join(newParts, ":"))
+}
+
+// cleanLegacyTrimSession 归档并清理旧版不兼容的 trim-cli 历史会话
+func cleanLegacyTrimSession() {
+	if globalHomeDir == "" {
+		return
+	}
+	dirs := []string{
+		filepath.Join(globalHomeDir, ".config", "trim-cli"),
+		globalHomeDir,
+	}
+	for _, cfgDir := range dirs {
+		legacySession := filepath.Join(cfgDir, "session.json")
+		if data, err := os.ReadFile(legacySession); err == nil {
+			if strings.Contains(string(data), `"token"`) {
+				_ = os.Remove(legacySession)
+				_ = os.RemoveAll(filepath.Join(cfgDir, "secure"))
+				LogInfo("[技能] 已清理旧版不兼容的飞牛技能会话凭据: %s", legacySession)
+			}
+		}
+	}
+}
+

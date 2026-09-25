@@ -72,4 +72,14 @@ export const snapshotApi = {
   delete: (id: string) => http.delete(`snapshots/${encodeURIComponent(id)}`)
 }
 
+/**
+ * 飞牛技能授权 API
+ */
+export const skillAuthApi = {
+  startAuth: () => http.post<{ url: string }>('skill/auth/start'),
+  confirmAuth: (code: string) => http.post<{ authorized: boolean }>('skill/auth/confirm', { code }),
+  logout: () => http.post<{ authorized: boolean }>('skill/auth/logout')
+}
+
+
 

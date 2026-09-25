@@ -45,7 +45,7 @@ fnOS 的命令行客户端。通过 HTTP API proxy 访问系统业务接口和�
 - 远程明文 HTTP 必须显式 `--allow-insecure-http`；自签 HTTPS 使用 `--tls-insecure`。
 - Agent 或非交互流程执行写命令时一律显式传 `--yes`；高风险存储命令还需要必要的密码预校验。
 - 不把 refresh token 或授权 code 发送给无关第三方。
-- DSH 沙箱环境下默认仅允许写入当前工作区；若执行命令遇到沙箱文件访问拒绝（`[sandbox: file access denied]`），可通过 `sandbox_permissions="danger-full-access"` 及理由申请用户单次授权重试，或指定工作区目录 `TRIM_CLI_CONFIG_DIR="$PWD/.trim-cli"`。
+- DSH 沙箱环境下默认仅允许写入当前工作区；全局凭据统一由 `$HOME/.config/trim-cli` 托管，**严禁覆盖 `TRIM_CLI_CONFIG_DIR`**。若执行写操作或文件下载遇到沙箱访问拒绝（`[sandbox: file access denied]`），可通过 `sandbox_permissions="danger-full-access"` 申请用户单次授权重试。
 
 ## 连接选项
 
@@ -61,22 +61,18 @@ fnOS 的命令行客户端。通过 HTTP API proxy 访问系统业务接口和�
 未显式传连接参数时，CLI 会复用当前 profile 保存的 host、port、scheme 和 TLS 设置。默认
 loopback 为 `http://localhost:5666`；远程 IP 默认 HTTPS 5667，域名默认 HTTPS 443。
 
-## 最小认证流程
+## 认证与登录规范
+
+- **凭据已由宿主系统自动托管**：DSH 环境变量（`PATH`）与授权凭据（`HOME`）已由系统在后台打通，Agent 可直接执行查询与操作命令，无需手动配置。
+- **严禁在会话中执行交互式登录**：会话工具无法向子进程输入验证码，**严禁执行 `trim-cli login`**（会导致命令无限挂起直至超时）。
+- **未授权时引导用户在设置页授权**：若执行命令遇到未授权（`unauthorized`）或凭据失效，必须停止执行命令，并明确回复引导用户前往 **「应用设置」界面的「飞牛官方 TRIM CLI 技能」处点击「登录授权」** 完成绑定。
+
+会话凭据临期时会自动刷新；如需排查会话状态或退出：
 
 ```bash
-trim-cli --profile home --host <host> --port <port> --scheme https login
-trim-cli --profile home login --refresh
-trim-cli --profile home logout
-```
-
-`login` 会输出授权链接并尝试打开浏览器，然后在当前终端等待 `Authorization code`。用户必须
-自行完成浏览器登录和授权，再把页面显示的一次性 code 粘贴回该提示。无法自动打开浏览器时
-使用 `login --no-open`，授权步骤仍完全相同。
-
-远程明文设备示例：
-
-```bash
-trim-cli --profile home --host <host> --port 5666 --scheme http --allow-insecure-http login --no-open
+trim-cli user info
+trim-cli login --refresh
+trim-cli logout
 ```
 
 ## 常用只读命令

@@ -39,6 +39,9 @@ func InitRoutes(r *gin.Engine) {
 		api.GET("/logs/download", handleDownloadLogs)
 		api.GET("/config", handleGetConfig)
 		api.POST("/config", handleSaveConfig)
+		api.POST("/skill/auth/start", handleSkillAuthStart)
+		api.POST("/skill/auth/confirm", handleSkillAuthConfirm)
+		api.POST("/skill/auth/logout", handleSkillAuthLogout)
 		api.GET("/workspace/list", handleGetWorkspaces)
 		api.GET("/plugins", handleListPlugins)
 		api.GET("/plugins/status", handlePluginStatus)
@@ -234,6 +237,7 @@ func handleWS(c *gin.Context) {
 	if currentProgress := GetCurrentSnapshotProgress(); currentProgress.Active {
 		sendMsg("snapshot_progress", currentProgress)
 	}
+	sendMsg("skill_auth", getSkillAuthPayload())
 
 	// 事件驱动：状态与日志变更即时推送
 	stateCh, unsubscribeState := state.SubscribeState(16)
@@ -250,6 +254,8 @@ func handleWS(c *gin.Context) {
 	defer unsubscribeSnapProgress()
 	usageCh, unsubscribeUsage := SubscribeUsage(16)
 	defer unsubscribeUsage()
+	skillAuthCh, unsubscribeSkillAuth := SubscribeSkillAuth(16)
+	defer unsubscribeSkillAuth()
 
 	// 读循环：消费客户端 ping 等应用层控制帧并检测断开
 	done := make(chan struct{})
@@ -291,6 +297,8 @@ func handleWS(c *gin.Context) {
 			sendMsg("snapshot_progress", p)
 		case u := <-usageCh:
 			sendMsg("usage", u)
+		case sa := <-skillAuthCh:
+			sendMsg("skill_auth", sa)
 		case <-heartbeat.C:
 			writeMu.Lock()
 			_ = conn.WriteMessage(websocket.PingMessage, nil)
@@ -678,5 +686,3 @@ func handleDeleteSnapshot(c *gin.Context) {
 	}
 	OKMsg(c, "快照已成功删除", nil)
 }
-
-

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { configApi } from '../api'
-import type { SettingsConfig, RequestResult } from '../types/api'
+import type { SettingsConfig, RequestResult, SkillAuthStatus } from '../types/api'
 
 export const useConfigStore = defineStore('config', () => {
   const config = ref<SettingsConfig>({
@@ -18,6 +18,7 @@ export const useConfigStore = defineStore('config', () => {
   })
 
   const savedConfig = ref<SettingsConfig | null>(null)
+  const skillAuthStatus = ref<SkillAuthStatus>({ authorized: false })
   const loading = ref(false)
   const saving = ref(false)
   const loadError = ref(false)
@@ -132,9 +133,15 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  // 更新飞牛技能授权状态
+  function updateSkillAuthStatus(status: SkillAuthStatus) {
+    skillAuthStatus.value = status
+  }
+
   return {
     config,
     savedConfig,
+    skillAuthStatus,
     loading,
     saving,
     loadError,
@@ -147,6 +154,7 @@ export const useConfigStore = defineStore('config', () => {
     isProxyDshChanged,
     fetchConfig,
     saveConfig,
-    resetConfig
+    resetConfig,
+    updateSkillAuthStatus
   }
 })

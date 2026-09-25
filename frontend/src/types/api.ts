@@ -211,4 +211,13 @@ export interface CreateSnapshotParams {
   compression_level?: number
 }
 
+/**
+ * 飞牛技能授权状态
+ */
+export interface SkillAuthStatus {
+  authorized: boolean
+  username?: string
+}
+
+
 

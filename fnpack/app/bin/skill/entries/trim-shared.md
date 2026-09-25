@@ -30,7 +30,7 @@ description: 当任务涉及登录、连接目标、session 回落、wrapper 用
 - 远程明文 `http://` 需要显式传 `--allow-insecure-http`
 - session 默认使用平台安全存储；只有在测试或 CI 隔离时才显式使用 `TRIM_CLI_SESSION_STORAGE=file`
 - 如需在安全存储写失败时人工确认低信任降级，可显式使用 `TRIM_CLI_SESSION_STORAGE=ask-file`
-- DSH 沙箱环境下默认仅允许写入当前工作区；若执行命令遇到沙箱文件访问拒绝（`[sandbox: file access denied]`），可通过 `sandbox_permissions="danger-full-access"` 及理由申请用户单次授权重试，或指定工作区目录 `TRIM_CLI_CONFIG_DIR="$PWD/.trim-cli"`
+- DSH 沙箱环境下默认仅允许写入当前工作区；全局凭据统一由 `$HOME/.config/trim-cli` 托管，**严禁覆盖 `TRIM_CLI_CONFIG_DIR`**。若执行写操作或文件下载遇到沙箱访问拒绝（`[sandbox: file access denied]`），可通过 `sandbox_permissions="danger-full-access"` 申请用户单次授权重试。
 - 登录使用 OAuth PKCE 授权，不要索取或猜测 NAS 账号密码
 - 生产环境只运行一次交互式 `login`：用户自行打开授权链接、登录并授权，再把一次性 code 粘贴
   回 CLI 提示；不要自动填写账号密码、点击授权或读取页面 code
