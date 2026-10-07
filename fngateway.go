@@ -135,23 +135,10 @@ func handleFnGateway(c *gin.Context) {
 				applyDshHtmlNoStore(resp.Header)
 			}
 
-			// 拦截并改写 PWA Web App Manifest 的子路径作用域
-			if (strings.Contains(contentType, "manifest+json") || (resp.Request != nil && strings.HasSuffix(resp.Request.URL.Path, ".webmanifest"))) && resp.Body != nil {
-				bodyBytes, err := io.ReadAll(resp.Body)
-				_ = resp.Body.Close()
-				if err == nil {
-					modified := rewriteGatewayManifest(bodyBytes)
-					resp.Body = io.NopCloser(bytes.NewReader(modified))
-					resp.ContentLength = int64(len(modified))
-					resp.Header.Set("Content-Length", strconv.Itoa(len(modified)))
-					resp.Header.Set("Content-Type", "application/manifest+json; charset=utf-8")
-				}
-			}
-
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			// API / 数据请求返回结构化 JSON
+			// 返回结构化 JSON
 			if !strings.Contains(r.Header.Get("Accept"), "text/html") {
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
 				w.WriteHeader(http.StatusBadGateway)
@@ -200,31 +187,6 @@ func rewriteGatewayCookie(ck string) string {
 	return cookiePathRegex.ReplaceAllString(ck, "Path="+fnGatewayPrefix+"/$1")
 }
 
-// rewriteGatewayManifest 改写 PWA Web App Manifest 中的 scope, start_url 与图标子路径
-func rewriteGatewayManifest(body []byte) []byte {
-	var manifest map[string]any
-	if err := json.Unmarshal(body, &manifest); err != nil {
-		return body
-	}
-	manifest["scope"] = fnGatewayPrefix + "/"
-	manifest["start_url"] = fnGatewayPrefix + "/"
-	manifest["id"] = fnGatewayPrefix + "/"
-	if icons, ok := manifest["icons"].([]any); ok {
-		for _, ic := range icons {
-			if icMap, ok := ic.(map[string]any); ok {
-				if src, ok := icMap["src"].(string); ok && strings.HasPrefix(src, "/") && !strings.HasPrefix(src, fnGatewayPrefix) {
-					icMap["src"] = fnGatewayPrefix + src
-				}
-			}
-		}
-	}
-	newBytes, err := json.Marshal(manifest)
-	if err != nil {
-		return body
-	}
-	return newBytes
-}
-
 // rewriteFnGatewayHtml 改写页面标签并注入核心补丁
 func rewriteFnGatewayHtml(body []byte) []byte {
 	// 注入凭据属性以放行 manifest 请求
@@ -234,11 +196,6 @@ func rewriteFnGatewayHtml(body []byte) []byte {
 		}
 		return match
 	})
-
-	// 兜底补齐缺失的 base 标签
-	if !bytes.Contains(bytes.ToLower(modified), []byte("<base")) {
-		modified = injectHtmlHead(modified, []byte(`<base href="./">`))
-	}
 
 	// 注入特权契约声明与样式隐藏补丁
 	return injectHtmlHead(modified, []byte(httpPolyfillScript))

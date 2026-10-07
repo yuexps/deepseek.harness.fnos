@@ -51,6 +51,7 @@ func InitRoutes(r *gin.Engine) {
 		api.POST("/plugins/cancel", handlePluginCancel)
 		api.GET("/snapshots", handleListSnapshots)
 		api.POST("/snapshots", handleCreateSnapshot)
+		api.POST("/snapshots/cancel", handleCancelSnapshot)
 		api.POST("/snapshots/:id/restore", handleRestoreSnapshot)
 		api.DELETE("/snapshots/:id", handleDeleteSnapshot)
 	}
@@ -661,6 +662,14 @@ func handleCreateSnapshot(c *gin.Context) {
 	}()
 
 	OKMsg(c, "快照创建任务已启动", gin.H{"name": params.Name})
+}
+
+func handleCancelSnapshot(c *gin.Context) {
+	if err := CancelSnapshotCreation(); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	OKMsg(c, "快照创建任务已取消", nil)
 }
 
 func handleRestoreSnapshot(c *gin.Context) {

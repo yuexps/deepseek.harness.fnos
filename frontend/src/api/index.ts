@@ -67,6 +67,7 @@ export const snapshotApi = {
   getList: () => http.get<SnapshotSummary>('snapshots'),
   create: (params: CreateSnapshotParams) =>
     http.post<SnapshotMeta>('snapshots', params, { timeout: 600000 }),
+  cancel: () => http.post('snapshots/cancel'),
   restore: (id: string) =>
     http.post(`snapshots/${encodeURIComponent(id)}/restore`, undefined, { timeout: 600000 }),
   delete: (id: string) => http.delete(`snapshots/${encodeURIComponent(id)}`)

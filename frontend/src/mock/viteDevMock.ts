@@ -229,6 +229,9 @@ export function viteDevMock(): Plugin {
       }, 1000)
 
       let mockSnapshotTask: any = null
+      let mockSnapshotPTimer: any = null
+      let mockSnapshotFinishTimer: any = null
+      let mockSnapshotOldStatus: ServiceStatus = 'running'
 
       function getMockSnapshotPayload() {
         const totalSize = mockSnapshots.reduce((acc, cur) => acc + (cur.size_bytes || 0), 0)
@@ -664,7 +667,16 @@ export function viteDevMock(): Plugin {
             return sendJson(res, 400, `已存在同名快照「${targetName}」，请更换名称`, null)
           }
 
-          const oldStatus = status
+          if (mockSnapshotPTimer) {
+            clearInterval(mockSnapshotPTimer)
+            mockSnapshotPTimer = null
+          }
+          if (mockSnapshotFinishTimer) {
+            clearTimeout(mockSnapshotFinishTimer)
+            mockSnapshotFinishTimer = null
+          }
+
+          mockSnapshotOldStatus = status
           status = 'snapshotting'
           lastMessage = '停止服务准备创建快照...'
           broadcast('status', getStatusPayload())
@@ -679,7 +691,6 @@ export function viteDevMock(): Plugin {
             harness_version: config.version,
             plugin_count: plugins.length
           }
-          mockSnapshots.unshift(newSnap)
 
           mockSnapshotTask = {
             active: true,
@@ -691,10 +702,12 @@ export function viteDevMock(): Plugin {
           broadcast('snapshot_progress', mockSnapshotTask)
 
           let p = 0
-          const pTimer = setInterval(() => {
+          mockSnapshotPTimer = setInterval(() => {
             p += 20
             if (p >= 100) {
-              clearInterval(pTimer)
+              clearInterval(mockSnapshotPTimer)
+              mockSnapshotPTimer = null
+              mockSnapshots.unshift(newSnap)
               mockSnapshotTask = {
                 active: true,
                 action: 'create',
@@ -719,15 +732,44 @@ export function viteDevMock(): Plugin {
             }
           }, 400)
 
-          setTimeout(() => {
-            status = oldStatus
+          mockSnapshotFinishTimer = setTimeout(() => {
+            status = mockSnapshotOldStatus
             lastMessage = ''
             appendLog(`[INFO] 快照 [${newSnap.name}] 创建成功`)
             broadcast('status', getStatusPayload())
             broadcast('snapshot', getMockSnapshotPayload())
           }, 2400)
 
-          return sendJson(res, 0, '快照创建成功', newSnap)
+          return sendJson(res, 0, '快照创建任务已启动', newSnap)
+        }
+
+        if (path.endsWith('/api/snapshots/cancel') && req.method === 'POST') {
+          if (!mockSnapshotTask || mockSnapshotTask.action !== 'create' || !mockSnapshotTask.active) {
+            return sendJson(res, 400, '当前没有正在执行的快照创建任务', null)
+          }
+
+          if (mockSnapshotPTimer) {
+            clearInterval(mockSnapshotPTimer)
+            mockSnapshotPTimer = null
+          }
+          if (mockSnapshotFinishTimer) {
+            clearTimeout(mockSnapshotFinishTimer)
+            mockSnapshotFinishTimer = null
+          }
+
+          mockSnapshotTask = {
+            active: false,
+            action: 'create',
+            percent: 0,
+            stage: '快照创建已取消',
+            message: '快照创建已手动取消',
+            error: '快照创建已手动取消'
+          }
+          broadcast('snapshot_progress', mockSnapshotTask)
+          status = mockSnapshotOldStatus
+          broadcast('status', getStatusPayload())
+          appendLog('[INFO] 快照创建已由用户手动取消，已恢复服务')
+          return sendJson(res, 0, '快照创建任务已取消', null)
         }
 
         if (path.includes('/api/snapshots/') && path.endsWith('/restore') && req.method === 'POST') {

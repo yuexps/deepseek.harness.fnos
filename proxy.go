@@ -31,7 +31,6 @@ var authLoginPageTpl = template.Must(template.New("auth_login").Parse(authLoginP
 
 const (
 	authCookieName      = "harness_session"
-	authLegacyCookie    = "harness_auth"
 	authLoginPath       = "/_harness_auth"
 	authMaxAttempts     = 3
 	authLockoutDuration = 1 * time.Hour
@@ -107,18 +106,8 @@ func getAuthToken(pwd string) string {
 }
 
 func isValidAuthCookie(r *http.Request, pwd string) bool {
-	expectedToken := getAuthToken(pwd)
-	// 优先检查新 session cookie
 	if c, err := r.Cookie(authCookieName); err == nil && c.Value != "" {
-		if c.Value == expectedToken || c.Value == pwd {
-			return true
-		}
-	}
-	// 兼容旧 auth cookie
-	if c, err := r.Cookie(authLegacyCookie); err == nil && c.Value != "" {
-		if c.Value == expectedToken || c.Value == pwd {
-			return true
-		}
+		return c.Value == getAuthToken(pwd)
 	}
 	return false
 }
@@ -231,7 +220,7 @@ func proxyWithAuth(next http.Handler) http.Handler {
 		}
 
 		// 放行公开静态元数据（避免 PWA 清单与图标因浏览器默认无凭证请求而触发登录页拦截）
-		if r.URL.Path == "/manifest.webmanifest" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/pwa-icon.svg" {
+		if r.URL.Path == "/manifest.webmanifest" || r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon-dark.svg" || r.URL.Path == "/pwa-icon.svg" {
 			if r.URL.Path == "/pwa-icon.svg" && len(pwaIconSvgBytes) > 0 {
 				w.Header().Set("Content-Type", "image/svg+xml")
 				w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -509,7 +498,6 @@ func injectHtmlPolyfill(body []byte) []byte {
 	return injectHtmlHead(body, []byte(httpPolyfillScript))
 }
 
-
 // rewriteProxyManifest 注入修改 PWA manifest 中的应用图标为 /pwa-icon.svg
 func rewriteProxyManifest(body []byte) []byte {
 	var manifest map[string]any
@@ -546,7 +534,6 @@ func appendDshSessionCookie(clientCookie, sessionCookie string) string {
 	return strings.Join(kept, "; ")
 }
 
-
 // applyDshHtmlNoStore 禁用 HTML 强缓存，避免复用旧版本资源
 func applyDshHtmlNoStore(header http.Header) {
 	header.Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
@@ -555,4 +542,3 @@ func applyDshHtmlNoStore(header http.Header) {
 	header.Del("ETag")
 	header.Del("Last-Modified")
 }
-

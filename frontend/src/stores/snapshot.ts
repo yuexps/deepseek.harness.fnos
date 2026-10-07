@@ -8,6 +8,7 @@ export const useSnapshotStore = defineStore('snapshot', () => {
   const totalSizeBytes = ref(0)
   const loading = ref(false)
   const actionLoading = ref(false)
+  const cancelLoading = ref(false)
 
   // 全局持久化快照进度状态
   const progressVisible = ref(false)
@@ -31,13 +32,15 @@ export const useSnapshotStore = defineStore('snapshot', () => {
   function updateProgress(data: SnapshotProgressTask) {
     if (!data) return
 
-    // 任务失败处理
+    // 任务失败或取消处理
     if (data.error) {
       progressAction.value = (data.action as 'create' | 'restore') || progressAction.value
-      progressStage.value = data.action === 'restore' ? '快照还原失败' : '快照创建失败'
+      // 优先采用服务端返回的 stage（如“快照创建已取消”），避免将手动取消误标为“快照创建失败”
+      progressStage.value = data.stage || (data.action === 'restore' ? '快照还原失败' : '快照创建失败')
       progressMessage.value = data.error
       progressPercent.value = 0
       actionLoading.value = false
+      cancelLoading.value = false
       if (!hideTimer) {
         hideTimer = setTimeout(() => {
           progressVisible.value = false
@@ -48,6 +51,7 @@ export const useSnapshotStore = defineStore('snapshot', () => {
     }
 
     if (data.active === false) {
+      cancelLoading.value = false
       if (progressVisible.value) {
         if (!hideTimer) {
           hideTimer = setTimeout(() => {
@@ -171,11 +175,24 @@ export const useSnapshotStore = defineStore('snapshot', () => {
     }
   }
 
+  async function cancelCreateSnapshot() {
+    cancelLoading.value = true
+    try {
+      const res = await snapshotApi.cancel()
+      return res
+    } finally {
+      setTimeout(() => {
+        cancelLoading.value = false
+      }, 500)
+    }
+  }
+
   return {
     snapshots,
     totalSizeBytes,
     loading,
     actionLoading,
+    cancelLoading,
     progressVisible,
     progressPercent,
     progressStage,
@@ -186,6 +203,7 @@ export const useSnapshotStore = defineStore('snapshot', () => {
     updateSummary,
     fetchSnapshots,
     createSnapshot,
+    cancelCreateSnapshot,
     restoreSnapshot,
     deleteSnapshot
   }

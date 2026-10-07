@@ -23,14 +23,26 @@
     <n-collapse-transition :show="progressVisible">
       <div
         class="p-3 sm:p-4 rounded-xl sm:rounded-2xl bg-white dark:bg-[#181a20] border border-blue-100 dark:border-blue-900/40 shadow-sm flex flex-col gap-2">
-        <div class="flex items-center justify-between text-xs sm:text-sm">
-          <div class="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-200 min-w-0">
+        <div class="flex items-center justify-between text-xs sm:text-sm gap-2">
+          <div class="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-200 min-w-0 flex-1">
             <n-spin :size="14" class="shrink-0" />
-            <span class="truncate">{{ progressTitle }}</span>
+            <span class="truncate" :title="progressTitle">{{ progressTitle }}</span>
           </div>
-          <span class="font-mono font-bold text-fnos-blue dark:text-blue-400 shrink-0 ml-2">
-            {{ Math.round(progressPercent) }}%
-          </span>
+          <div class="flex items-center gap-3 shrink-0">
+            <span class="font-mono font-bold text-fnos-blue dark:text-blue-400">
+              {{ Math.round(progressPercent) }}%
+            </span>
+            <n-button v-if="progressAction === 'create' && progressPercent < 100" size="small" secondary type="error"
+              :loading="cancelLoading" @click="promptCancelCreate"
+              class="!h-7 !px-2 rounded-lg text-xs font-medium transition-all duration-150 hover:scale-[1.02] active:scale-95 [&_.n-button__icon]:!mr-1">
+              <template #icon>
+                <n-icon>
+                  <X />
+                </n-icon>
+              </template>
+              取消
+            </n-button>
+          </div>
         </div>
         <n-progress type="line" :percentage="progressPercent" :show-indicator="false" :processing="true" status="info"
           :height="6" border-radius="3px" />
@@ -200,7 +212,8 @@ import {
   History,
   Clock,
   Trash,
-  Rotate
+  Rotate,
+  X
 } from '@vicons/tabler'
 import { useSnapshotStore } from '../stores/snapshot'
 import type { SnapshotMeta } from '../types/api'
@@ -214,9 +227,11 @@ const {
   totalSizeBytes,
   loading,
   actionLoading,
+  cancelLoading,
   progressVisible,
   progressPercent,
-  progressTitle
+  progressTitle,
+  progressAction
 } = storeToRefs(snapshotStore)
 
 // 创建弹窗状态
@@ -296,6 +311,28 @@ function handleCreateSnapshot() {
   })
 
   return true
+}
+
+function promptCancelCreate() {
+  dialog.warning({
+    title: '确认取消创建快照？',
+    content: '取消后将中止正在进行的打包流程，清理未完成的快照数据并恢复服务。确定要取消吗？',
+    positiveText: '确认取消',
+    negativeText: '继续打包',
+    positiveButtonProps: { type: 'error' },
+    onPositiveClick: async () => {
+      try {
+        const res = await snapshotStore.cancelCreateSnapshot()
+        if (res.success) {
+          message.info(res.message || '正在取消快照创建...')
+        } else {
+          message.error(res.message || '取消失败')
+        }
+      } catch (err: any) {
+        message.error(err?.message || '取消失败')
+      }
+    }
+  })
 }
 
 function promptRestore(item: SnapshotMeta) {
