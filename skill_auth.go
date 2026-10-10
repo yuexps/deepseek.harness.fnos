@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,16 +39,26 @@ func getTrimCliPath() string {
 	return filepath.Join(globalDshHome, "skills", "fnos", "scripts", "trim-cli")
 }
 
-// createAuthLoginCmd 构建带伪终端支持的认证子进程命令
-func createAuthLoginCmd() *exec.Cmd {
+// createAuthLoginCmd 构建带伪终端支持的认证子进程命令，支持自定义端口
+func createAuthLoginCmd(port string) *exec.Cmd {
 	trimPath := getTrimCliPath()
+	var extraArgs []string
+	if strings.TrimSpace(port) != "" {
+		extraArgs = append(extraArgs, "--port", strings.TrimSpace(port))
+	}
+
 	if runtime.GOOS == "linux" {
 		if scriptBin, err := exec.LookPath("script"); err == nil {
 			cmdStr := fmt.Sprintf("%s login --no-open", trimPath)
+			if len(extraArgs) > 0 {
+				cmdStr = fmt.Sprintf("%s --port %s login --no-open", trimPath, strings.TrimSpace(port))
+			}
 			return exec.Command(scriptBin, "-qec", cmdStr, "/dev/null")
 		}
 	}
-	return exec.Command(trimPath, "login", "--no-open")
+
+	args := append(extraArgs, "login", "--no-open")
+	return exec.Command(trimPath, args...)
 }
 
 // SubscribeSkillAuth 订阅技能授权状态变更事件
@@ -64,9 +75,75 @@ func SubscribeSkillAuth(buf int) (<-chan gin.H, func()) {
 	}
 }
 
+var (
+	cachedSkillAuthPayload gin.H
+	cachedSkillAuthMu      sync.RWMutex
+	cachedSkillAuthLoaded  bool
+)
+
+// refreshSkillAuthPayload 重新探测并更新飞牛技能授权内存缓存
+func refreshSkillAuthPayload() gin.H {
+	cachedSkillAuthMu.Lock()
+	defer cachedSkillAuthMu.Unlock()
+
+	if !isSkillEnabled() {
+		cachedSkillAuthPayload = gin.H{"authorized": false}
+		cachedSkillAuthLoaded = true
+		return cachedSkillAuthPayload
+	}
+
+	activeEnc := filepath.Join(globalHomeDir, ".config", "trim-cli", "secure", "active.enc")
+	if _, err := os.Stat(activeEnc); err != nil {
+		cachedSkillAuthPayload = gin.H{"authorized": false}
+		cachedSkillAuthLoaded = true
+		return cachedSkillAuthPayload
+	}
+
+	cmd := exec.Command(getTrimCliPath(), "user", "info")
+	cmd.Env = append(os.Environ(), "HOME="+globalHomeDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		cachedSkillAuthPayload = gin.H{"authorized": false}
+		cachedSkillAuthLoaded = true
+		return cachedSkillAuthPayload
+	}
+
+	var u struct {
+		Username string `json:"username"`
+	}
+	_ = json.Unmarshal(out, &u)
+	cachedSkillAuthPayload = gin.H{"authorized": true, "username": u.Username}
+	cachedSkillAuthLoaded = true
+	return cachedSkillAuthPayload
+}
+
+// getSkillAuthPayload 获取当前飞牛技能授权状态（优先读取内存缓存）
+func getSkillAuthPayload() gin.H {
+	if !isSkillEnabled() {
+		return gin.H{"authorized": false}
+	}
+
+	cachedSkillAuthMu.RLock()
+	if cachedSkillAuthLoaded {
+		payload := cachedSkillAuthPayload
+		cachedSkillAuthMu.RUnlock()
+
+		if auth, ok := payload["authorized"].(bool); ok && auth {
+			activeEnc := filepath.Join(globalHomeDir, ".config", "trim-cli", "secure", "active.enc")
+			if _, err := os.Stat(activeEnc); err != nil {
+				return refreshSkillAuthPayload()
+			}
+		}
+		return payload
+	}
+	cachedSkillAuthMu.RUnlock()
+
+	return refreshSkillAuthPayload()
+}
+
 // broadcastSkillAuth 向所有 WebSocket 客户端广播最新授权状态
 func broadcastSkillAuth() {
-	payload := getSkillAuthPayload()
+	payload := refreshSkillAuthPayload()
 	skillAuthSubsMu.Lock()
 	defer skillAuthSubsMu.Unlock()
 	for ch := range skillAuthSubs {
@@ -75,31 +152,6 @@ func broadcastSkillAuth() {
 		default:
 		}
 	}
-}
-
-// getSkillAuthPayload 获取当前飞牛技能授权状态快照
-func getSkillAuthPayload() gin.H {
-	if !isSkillEnabled() {
-		return gin.H{"authorized": false}
-	}
-
-	activeEnc := filepath.Join(globalHomeDir, ".config", "trim-cli", "secure", "active.enc")
-	if _, err := os.Stat(activeEnc); err != nil {
-		return gin.H{"authorized": false}
-	}
-
-	cmd := exec.Command(getTrimCliPath(), "user", "info")
-	cmd.Env = append(os.Environ(), "HOME="+globalHomeDir)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return gin.H{"authorized": false}
-	}
-
-	var u struct {
-		Username string `json:"username"`
-	}
-	_ = json.Unmarshal(out, &u)
-	return gin.H{"authorized": true, "username": u.Username}
 }
 
 // cancelCurrentSkillAuth 取消并清理当前未完成的授权交互会话
@@ -125,13 +177,30 @@ func handleSkillAuthStart(c *gin.Context) {
 		return
 	}
 
+	var req struct {
+		Port string `json:"port"`
+	}
+	if c.Request.Body != nil {
+		_ = c.ShouldBindJSON(&req)
+	}
+	port := strings.TrimSpace(req.Port)
+	if port == "" {
+		port = strings.TrimSpace(c.Query("port"))
+	}
+	if port != "" {
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			Fail(c, http.StatusBadRequest, "端口号无效，必须为 1 到 65535 之间的整数")
+			return
+		}
+	}
+
 	skillAuthMu.Lock()
 	defer skillAuthMu.Unlock()
 
 	cancelCurrentSkillAuth()
 	cleanLegacyTrimSession()
 
-	cmd := createAuthLoginCmd()
+	cmd := createAuthLoginCmd(port)
 	cmd.Dir = filepath.Join(globalDshHome, "skills", "fnos")
 	cmd.Env = append(os.Environ(),
 		"HOME="+globalHomeDir,

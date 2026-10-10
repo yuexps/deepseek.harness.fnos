@@ -326,6 +326,17 @@
     <n-modal v-model:show="showAuthModal" preset="card" title="飞牛技能授权" class="max-w-md rounded-2xl shadow-xl"
       :mask-closable="!startingAuth && !confirmingAuth">
       <div class="space-y-3.5 py-1">
+        <!-- 自定义端口 (可选) -->
+        <div
+          class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-1.5">
+          <div class="flex items-center justify-between text-xs">
+            <span class="font-medium text-slate-700 dark:text-slate-300">访问端口 (可选)</span>
+            <span class="text-[11px] text-slate-400">如无更改，则留空保持默认</span>
+          </div>
+          <n-input v-model:value="authPort" type="text" placeholder="默认端口" clearable
+            :disabled="startingAuth || confirmingAuth" @update:value="handlePortChange" />
+        </div>
+
         <div
           class="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-2">
           <div class="flex items-center justify-between text-xs">
@@ -445,6 +456,12 @@ const confirmingAuth = ref(false)
 const loggingOut = ref(false)
 const authUrl = ref('')
 const authCode = ref('')
+const authPort = ref('')
+
+// 端口变更时重置授权链接
+const handlePortChange = () => {
+  authUrl.value = ''
+}
 
 // 打开授权弹窗并拉取登录 URL
 const openAuthModal = async () => {
@@ -453,7 +470,7 @@ const openAuthModal = async () => {
   showAuthModal.value = true
   startingAuth.value = true
   try {
-    const res = await skillAuthApi.startAuth()
+    const res = await skillAuthApi.startAuth(authPort.value.trim())
     if (res.success && res.data?.url) {
       let targetUrl = res.data.url
       if (targetUrl.includes('/signin?')) {
@@ -475,7 +492,7 @@ const handleOpenAuthPage = async () => {
   if (!authUrl.value) {
     startingAuth.value = true
     try {
-      const res = await skillAuthApi.startAuth()
+      const res = await skillAuthApi.startAuth(authPort.value.trim())
       if (res.success && res.data?.url) {
         let targetUrl = res.data.url
         if (targetUrl.includes('/signin?')) {
