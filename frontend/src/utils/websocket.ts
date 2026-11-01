@@ -4,8 +4,7 @@ import type {
   WorkspaceData,
   PluginStatus,
   SnapshotSummary,
-  SnapshotProgressTask,
-  SkillAuthStatus
+  SnapshotProgressTask
 } from '../types/api'
 
 export type WSEventMap = {
@@ -19,7 +18,6 @@ export type WSEventMap = {
   connectionChange: boolean
   reconnected: void
   snapshot_progress: SnapshotProgressTask
-  skill_auth: SkillAuthStatus
 }
 
 type EventCallback<K extends keyof WSEventMap> = (data: WSEventMap[K]) => void

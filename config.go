@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,21 +16,20 @@ const (
 )
 
 type Config struct {
-	ServerPort         int    `json:"server_port"`
-	ProxyPort          int    `json:"proxy_port"`
-	HeapMemoryLimit    int    `json:"heap_memory_limit,omitempty"`
-	NetworkProxy       string `json:"network_proxy"`
-	ProxyDshRuntime    *bool  `json:"proxy_dsh_runtime,omitempty"`
-	NpmRegistry        string `json:"npm_registry,omitempty"`
-	UpdateChannel      string `json:"update_channel,omitempty"`
-	AccessMode         string `json:"access_mode,omitempty"`
-	ReverseProxyURL    string `json:"reverse_proxy_url,omitempty"`
-	AccessPassword     string `json:"access_password,omitempty"`
-	DataLibraryPath    string `json:"data_library_path,omitempty"`
-	EnableBuiltinSkill *bool  `json:"enable_builtin_skill,omitempty"`
-	Version            string `json:"version,omitempty"`
-	BuildTime          string `json:"build_time,omitempty"`
-	LastRunState       string `json:"last_run_state,omitempty"`
+	ServerPort      int    `json:"server_port"`
+	ProxyPort       int    `json:"proxy_port"`
+	HeapMemoryLimit int    `json:"heap_memory_limit,omitempty"`
+	NetworkProxy    string `json:"network_proxy"`
+	ProxyDshRuntime *bool  `json:"proxy_dsh_runtime,omitempty"`
+	NpmRegistry     string `json:"npm_registry,omitempty"`
+	UpdateChannel   string `json:"update_channel,omitempty"`
+	AccessMode      string `json:"access_mode,omitempty"`
+	ReverseProxyURL string `json:"reverse_proxy_url,omitempty"`
+	AccessPassword  string `json:"access_password,omitempty"`
+	DataLibraryPath string `json:"data_library_path,omitempty"`
+	Version         string `json:"version,omitempty"`
+	BuildTime       string `json:"build_time,omitempty"`
+	LastRunState    string `json:"last_run_state,omitempty"`
 }
 
 func (c Config) IsProxyDshRuntimeEnabled() bool {
@@ -77,17 +75,15 @@ var (
 
 func InitConfig() {
 	configFilePath = filepath.Join(globalPkgVar, "config.json")
-	defaultSkillEnabled := true
 	defaultProxyDsh := false
 	globalConfig = Config{
-		ServerPort:         2298,
-		ProxyPort:          2299,
-		AccessMode:         "fngateway",
-		DataLibraryPath:    globalPkgVar,
-		EnableBuiltinSkill: &defaultSkillEnabled,
-		ProxyDshRuntime:    &defaultProxyDsh,
-		NpmRegistry:        DefaultNpmRegistry,
-		UpdateChannel:      "latest",
+		ServerPort:      2298,
+		ProxyPort:       2299,
+		AccessMode:      "fngateway",
+		DataLibraryPath: globalPkgVar,
+		ProxyDshRuntime: &defaultProxyDsh,
+		NpmRegistry:     DefaultNpmRegistry,
+		UpdateChannel:   "latest",
 	}
 	data, err := os.ReadFile(configFilePath)
 	if err != nil {
@@ -96,9 +92,6 @@ func InitConfig() {
 	_ = json.Unmarshal(data, &globalConfig)
 	if globalConfig.UpdateChannel == "" {
 		globalConfig.UpdateChannel = "latest"
-	}
-	if globalConfig.EnableBuiltinSkill == nil {
-		globalConfig.EnableBuiltinSkill = &defaultSkillEnabled
 	}
 	if globalConfig.ProxyDshRuntime == nil {
 		globalConfig.ProxyDshRuntime = &defaultProxyDsh
@@ -269,195 +262,5 @@ func SaveConfig(cfg Config) error {
 	}
 	ApplyProxyEnv()
 	ApplyNpmRegistryEnv()
-	ApplyBuiltinSkillConfig()
 	return nil
 }
-
-// ApplyBuiltinSkillConfig 同步或切换内置飞牛官方技能文件
-func ApplyBuiltinSkillConfig() {
-	skillSrc := filepath.Join(globalAppDest, "bin", "skill")
-	if _, err := os.Stat(skillSrc); err != nil {
-		skillSrc = "fnpack/app/bin/skill"
-	}
-	if _, err := os.Stat(skillSrc); err != nil {
-		return
-	}
-
-	cfg := GetConfig()
-	enabled := true
-	if cfg.EnableBuiltinSkill != nil {
-		enabled = *cfg.EnableBuiltinSkill
-	}
-
-	skillsDir := filepath.Join(globalDshHome, "skills")
-	srcMeta := readSkillManifest(skillSrc)
-	skillName := srcMeta.Name
-	if skillName == "" {
-		skillName = "fnos"
-	}
-	targetSkill := filepath.Join(skillsDir, skillName)
-	skillScriptsDir := filepath.Join(targetSkill, "scripts")
-
-	if !enabled {
-		updateSkillPathEnv(skillScriptsDir, false)
-		_ = os.RemoveAll(targetSkill)
-		_ = os.RemoveAll(filepath.Join(skillsDir, "trim-cli"))
-		LogInfo("[技能] 飞牛官方内置技能已移除")
-		broadcastSkillAuth()
-		return
-	}
-
-	updateSkillPathEnv(skillScriptsDir, true)
-	cleanLegacyTrimSession()
-
-	// 清理旧版本遗留目录（如 trim-cli）
-	if skillName != "trim-cli" {
-		_ = os.RemoveAll(filepath.Join(skillsDir, "trim-cli"))
-	}
-
-	dstMeta := readSkillManifest(targetSkill)
-
-	// 若已存在且源版本不高于已部署版本则跳过
-	if dstMeta.Version != "" && CompareSemver(srcMeta.Version, dstMeta.Version) <= 0 {
-		broadcastSkillAuth()
-		return
-	}
-
-	_ = os.MkdirAll(skillsDir, 0755)
-
-	// 复制技能目录
-	_ = os.RemoveAll(targetSkill)
-	if err := copyDir(skillSrc, targetSkill); err != nil {
-		LogError("[技能] 复制技能文件失败: %v", err)
-		return
-	}
-
-	// 设置脚本与二进制文件可执行权限
-	_ = os.Chmod(filepath.Join(targetSkill, "scripts", "trim-cli"), 0755)
-	if binFiles, err := os.ReadDir(filepath.Join(targetSkill, "bin")); err == nil {
-		for _, f := range binFiles {
-			_ = os.Chmod(filepath.Join(targetSkill, "bin", f.Name()), 0755)
-		}
-	}
-
-	if dstMeta.Version == "" {
-		LogInfo("[技能] 飞牛官方内置技能已部署: %s (v%s)", skillName, srcMeta.Version)
-	} else {
-		LogInfo("[技能] 飞牛官方内置技能已升级: %s (v%s → v%s)", skillName, dstMeta.Version, srcMeta.Version)
-	}
-	broadcastSkillAuth()
-}
-
-type skillManifest struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-// readSkillManifest 读取技能目录 manifest.json 中的元数据
-func readSkillManifest(dir string) skillManifest {
-	data, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
-	if err != nil {
-		return skillManifest{}
-	}
-	var m skillManifest
-	_ = json.Unmarshal(data, &m)
-	m.Name = strings.TrimSpace(m.Name)
-	m.Version = strings.TrimSpace(m.Version)
-	return m
-}
-
-// copyFile 复制单个文件并保留权限
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	info, err := in.Stat()
-	if err != nil {
-		return err
-	}
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return nil
-}
-
-// copyDir 递归复制目录
-func copyDir(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(dst, info.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// updateSkillPathEnv 根据内置技能启用状态动态更新 PATH 环境变量
-func updateSkillPathEnv(scriptsDir string, enabled bool) {
-	currPath := os.Getenv("PATH")
-	parts := strings.Split(currPath, ":")
-	var newParts []string
-	for _, p := range parts {
-		if p != "" && p != scriptsDir {
-			newParts = append(newParts, p)
-		}
-	}
-	if enabled && scriptsDir != "" {
-		newParts = append([]string{scriptsDir}, newParts...)
-	}
-	_ = os.Setenv("PATH", strings.Join(newParts, ":"))
-}
-
-// cleanLegacyTrimSession 归档并清理旧版不兼容的 trim-cli 历史会话
-func cleanLegacyTrimSession() {
-	if globalHomeDir == "" {
-		return
-	}
-	dirs := []string{
-		filepath.Join(globalHomeDir, ".config", "trim-cli"),
-		globalHomeDir,
-	}
-	for _, cfgDir := range dirs {
-		legacySession := filepath.Join(cfgDir, "session.json")
-		if data, err := os.ReadFile(legacySession); err == nil {
-			if strings.Contains(string(data), `"token"`) {
-				_ = os.Remove(legacySession)
-				_ = os.RemoveAll(filepath.Join(cfgDir, "secure"))
-				LogInfo("[技能] 已清理旧版不兼容的飞牛技能会话凭据: %s", legacySession)
-			}
-		}
-	}
-}
-

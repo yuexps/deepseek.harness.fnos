@@ -23,7 +23,6 @@ export function viteDevMock(): Plugin {
         access_mode: 'fngateway',
         reverse_proxy_url: '',
         access_password: '',
-        enable_builtin_skill: true,
         data_library_path: '/vol1/@appdata/deepseek.harness',
         version: '0.1.5-alpha.1',
         build_time: '2026-09-08 23:57'

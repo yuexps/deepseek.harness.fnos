@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { configApi } from '../api'
-import type { SettingsConfig, RequestResult, SkillAuthStatus } from '../types/api'
+import type { SettingsConfig, RequestResult } from '../types/api'
 
 export const useConfigStore = defineStore('config', () => {
   const config = ref<SettingsConfig>({
@@ -14,12 +14,10 @@ export const useConfigStore = defineStore('config', () => {
     update_channel: 'latest',
     access_mode: 'fngateway',
     reverse_proxy_url: '',
-    access_password: '',
-    enable_builtin_skill: true
+    access_password: ''
   })
 
   const savedConfig = ref<SettingsConfig | null>(null)
-  const skillAuthStatus = ref<SkillAuthStatus>({ authorized: false })
   const loading = ref(false)
   const saving = ref(false)
   const loadError = ref(false)
@@ -39,8 +37,7 @@ export const useConfigStore = defineStore('config', () => {
       (config.value.npm_registry || 'https://registry.npmmirror.com') !== (savedConfig.value.npm_registry || 'https://registry.npmmirror.com') ||
       (config.value.update_channel || 'latest') !== (savedConfig.value.update_channel || 'latest') ||
       (config.value.reverse_proxy_url || '') !== (savedConfig.value.reverse_proxy_url || '') ||
-      (config.value.access_password || '') !== (savedConfig.value.access_password || '') ||
-      Boolean(config.value.enable_builtin_skill ?? true) !== Boolean(savedConfig.value.enable_builtin_skill ?? true)
+      (config.value.access_password || '') !== (savedConfig.value.access_password || '')
     )
   })
 
@@ -91,9 +88,6 @@ export const useConfigStore = defineStore('config', () => {
           data.access_mode = data.reverse_proxy_url ? 'custom' : 'fngateway'
         }
         data.heap_memory_limit = data.heap_memory_limit ?? 0
-        if (data.enable_builtin_skill === undefined) {
-          data.enable_builtin_skill = true
-        }
         if (data.proxy_dsh_runtime === undefined) {
           data.proxy_dsh_runtime = false
         }
@@ -138,15 +132,9 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  // 更新飞牛技能授权状态
-  function updateSkillAuthStatus(status: SkillAuthStatus) {
-    skillAuthStatus.value = status
-  }
-
   return {
     config,
     savedConfig,
-    skillAuthStatus,
     loading,
     saving,
     loadError,
@@ -159,11 +147,10 @@ export const useConfigStore = defineStore('config', () => {
     isProxyDshChanged,
     fetchConfig,
     saveConfig,
-    resetConfig,
-    updateSkillAuthStatus
+    resetConfig
   }
 }, {
   persist: {
-    paths: ['config', 'savedConfig', 'skillAuthStatus', 'configLoaded']
+    paths: ['config', 'savedConfig', 'configLoaded']
   }
 })

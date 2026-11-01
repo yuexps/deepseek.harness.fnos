@@ -258,7 +258,6 @@ func InitHarness() {
 
 	// 常规启动并按上次状态自启
 	refreshVersion()
-	ApplyBuiltinSkillConfig()
 	go installPnpm()
 	if GetLastRunState() == StatusRunning {
 		LogInfo("[核心] 恢复上次运行状态 (running)，拉起服务")

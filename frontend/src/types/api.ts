@@ -153,7 +153,6 @@ export interface SettingsConfig {
   reverse_proxy_url: string
   access_password: string
   data_library_path?: string
-  enable_builtin_skill?: boolean
   version?: string
   build_time?: string
 }
@@ -210,14 +209,6 @@ export interface SnapshotSummary {
 export interface CreateSnapshotParams {
   name: string
   compression_level?: number
-}
-
-/**
- * 飞牛技能授权状态
- */
-export interface SkillAuthStatus {
-  authorized: boolean
-  username?: string
 }
 
 /**

@@ -76,16 +76,6 @@ export const snapshotApi = {
 }
 
 /**
- * 飞牛技能授权 API
- */
-export const skillAuthApi = {
-  startAuth: (port?: string | number) =>
-    http.post<{ url: string }>('skill/auth/start', port ? { port: String(port).trim() } : undefined),
-  confirmAuth: (code: string) => http.post<{ authorized: boolean }>('skill/auth/confirm', { code }),
-  logout: () => http.post<{ authorized: boolean }>('skill/auth/logout')
-}
-
-/**
  * DeepSeek 官方账号授权 API
  */
 export const accountApi = {

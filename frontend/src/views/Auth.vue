@@ -123,69 +123,6 @@
           </div>
         </div>
       </n-card>
-
-      <!-- 2. 飞牛官方技能命令行授权卡片 -->
-      <n-card :bordered="false"
-        class="shadow-sm group rounded-2xl overflow-hidden hover:shadow-md transition-all duration-200">
-        <div class="flex flex-col gap-4">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
-            <div class="flex items-start sm:items-center gap-2.5 sm:gap-3.5 min-w-0 flex-1">
-              <!-- 图标容器 -->
-              <div
-                class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-white/[0.06] group-hover:bg-blue-50 dark:group-hover:bg-blue-950/40 text-slate-500 dark:text-slate-400 group-hover:text-fnos-blue dark:group-hover:text-blue-400 flex items-center justify-center transition-all duration-200 group-hover:scale-105 shrink-0 mt-0.5 sm:mt-0">
-                <n-icon :size="20">
-                  <Terminal2 />
-                </n-icon>
-              </div>
-
-              <div class="min-w-0 flex-1 space-y-1">
-                <div class="flex items-center gap-2 flex-wrap min-w-0">
-                  <span class="text-sm sm:text-base font-semibold text-slate-800 dark:text-slate-100 leading-tight">
-                    飞牛官方技能 (fnOS CLI)
-                  </span>
-                  <n-tag v-if="!isSkillEnabled" type="default" size="small" round :bordered="false"
-                    class="font-medium text-xs text-slate-500 bg-slate-100 dark:bg-slate-800">
-                    未启用技能
-                  </n-tag>
-                  <n-tag v-else-if="skillAuthStatus?.authorized" type="success" size="small" round :bordered="false"
-                    class="font-medium text-xs">
-                    已授权 {{ skillAuthStatus.username ? `(${skillAuthStatus.username})` : '' }}
-                  </n-tag>
-                  <n-tag v-else type="warning" size="small" round :bordered="false" class="font-medium text-xs">
-                    未授权
-                  </n-tag>
-                </div>
-                <p class="text-xs text-slate-400 dark:text-slate-500 truncate">
-                  {{ !isSkillEnabled ? '未在应用设置中开启飞牛官方技能，开启后可进行账号授权' : '向 DSH 提供 NAS 文件管理、相册索引、磁盘监控等本地操作能力' }}
-                </p>
-              </div>
-            </div>
-
-            <!-- 操作按钮组 -->
-            <div class="flex items-center gap-2 shrink-0">
-              <n-button v-if="!isSkillEnabled" size="medium" secondary @click="goToSettings"
-                class="w-full sm:w-auto !h-9 sm:!h-10 px-4 font-medium rounded-xl text-sm transition-transform duration-150 active:scale-95">
-                <template #icon>
-                  <n-icon :size="16">
-                    <Settings />
-                  </n-icon>
-                </template>
-                前往开启
-              </n-button>
-              <n-button v-else-if="!skillAuthStatus?.authorized" size="medium" type="primary" secondary
-                @click="openSkillAuthModal"
-                class="w-full sm:w-auto !h-9 sm:!h-10 px-5 font-medium rounded-xl text-sm transition-transform duration-150 active:scale-95">
-                登录授权
-              </n-button>
-              <n-button v-else size="medium" quaternary type="error" :loading="loggingOutSkill"
-                @click="handleSkillLogout"
-                class="!h-9 sm:!h-10 px-3 rounded-xl text-xs sm:text-sm font-medium transition-transform duration-150 active:scale-95">
-                解除授权
-              </n-button>
-            </div>
-          </div>
-        </div>
-      </n-card>
     </div>
 
     <!-- 切换 DeepSeek 账号弹窗 -->
@@ -314,61 +251,6 @@
       </div>
     </n-modal>
 
-    <!-- 飞牛技能授权弹窗 -->
-    <n-modal v-model:show="showSkillModal" :auto-focus="false" preset="card" title="飞牛官方技能授权"
-      class="w-full max-w-lg rounded-2xl shadow-xl" :mask-closable="!startingSkillAuth && !confirmingSkillAuth">
-      <div class="space-y-4 py-1">
-        <!-- 访问端口 (可选) -->
-        <div
-          class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-2">
-          <div class="flex items-center justify-between text-xs">
-            <span class="font-medium text-slate-700 dark:text-slate-300">访问端口 (可选)</span>
-            <span class="text-[11px] text-slate-400">如系统使用非默认端口，可在此指定</span>
-          </div>
-          <n-input v-model:value="skillAuthPort" type="text" placeholder="默认端口" clearable
-            :disabled="startingSkillAuth || confirmingSkillAuth" class="rounded-xl text-xs" />
-        </div>
-
-        <!-- 步骤 1：前往官方授权页面 -->
-        <div
-          class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-2.5">
-          <div class="text-xs font-medium text-slate-700 dark:text-slate-300">
-            步骤一：前往官方授权页面
-          </div>
-          <n-button type="primary" block :loading="startingSkillAuth" @click="handleOpenSkillAuthPage"
-            class="!h-10 rounded-xl font-medium shadow-xs shadow-blue-500/20">
-            <template #icon>
-              <n-icon>
-                <ExternalLink />
-              </n-icon>
-            </template>
-            前往授权页面
-          </n-button>
-        </div>
-
-        <!-- 步骤 2：填入授权代码 -->
-        <div
-          class="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 space-y-2.5">
-          <div class="text-xs font-medium text-slate-700 dark:text-slate-300">
-            步骤二：填入授权代码
-          </div>
-          <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-            在官方页面完成登录后，复制页面中展示的授权代码，粘贴至下方输入框并点击确认绑定。
-          </p>
-          <n-input v-model:value="skillAuthCode" type="text" placeholder="在此粘贴获取到的授权代码" clearable
-            :disabled="confirmingSkillAuth" @keydown.enter="handleConfirmSkillAuth"
-            class="rounded-xl font-mono text-xs" />
-        </div>
-
-        <div class="flex justify-end gap-2 pt-1">
-          <n-button :disabled="confirmingSkillAuth" @click="showSkillModal = false">取消</n-button>
-          <n-button type="primary" :loading="confirmingSkillAuth" :disabled="!skillAuthCode.trim()"
-            @click="handleConfirmSkillAuth">
-            确认绑定
-          </n-button>
-        </div>
-      </div>
-    </n-modal>
   </div>
 </template>
 
@@ -388,35 +270,22 @@ import {
 } from 'naive-ui'
 import {
   BrandNytimes,
-  Terminal2,
   ExternalLink,
   Refresh,
-  Settings,
   Plus,
   Trash,
   User
 } from '@vicons/tabler'
-import { accountApi, skillAuthApi } from '../api'
+import { accountApi } from '../api'
 import { useAuthStore } from '../stores/auth'
-import { useConfigStore } from '../stores/config'
-import { useAppStore } from '../stores/app'
 import { trimSdk } from '../utils/trimSdk'
 
 const message = useMessage()
 const authStore = useAuthStore()
-const configStore = useConfigStore()
-const appStore = useAppStore()
-
-const isSkillEnabled = computed(() => configStore.config.enable_builtin_skill !== false)
-
-function goToSettings() {
-  appStore.setTab('settings')
-}
 
 const refreshing = computed(() => authStore.refreshing)
 const accountStatus = computed(() => authStore.accountStatus)
 const isAccountLoggedIn = computed(() => authStore.isAccountLoggedIn)
-const skillAuthStatus = computed(() => configStore.skillAuthStatus)
 
 // 账号池相关状态
 const accountPool = computed(() => authStore.accountPool)
@@ -464,14 +333,6 @@ const confirmingLogin = ref(false)
 const loggingOutAccount = ref(false)
 const loginAuthUrl = ref('')
 const callbackUrlInput = ref('')
-
-// 飞牛技能授权相关状态
-const showSkillModal = ref(false)
-const startingSkillAuth = ref(false)
-const confirmingSkillAuth = ref(false)
-const loggingOutSkill = ref(false)
-const skillAuthCode = ref('')
-const skillAuthPort = ref('')
 
 // 手动刷新账号状态
 async function handleManualRefresh() {
@@ -575,86 +436,13 @@ async function handleAccountLogout() {
   }
 }
 
-// 打开飞牛技能授权弹窗
-async function openSkillAuthModal() {
-  if (!isSkillEnabled.value) {
-    message.warning('请先在应用设置中开启飞牛官方内置技能')
-    return
-  }
-  skillAuthPort.value = ''
-  skillAuthCode.value = ''
-  showSkillModal.value = true
-}
-
-// 打开飞牛技能授权页面
-async function handleOpenSkillAuthPage() {
-  startingSkillAuth.value = true
-  try {
-    const res = await skillAuthApi.startAuth(skillAuthPort.value.trim())
-    if (res.success && res.data?.url) {
-      let targetUrl = res.data.url
-      if (targetUrl.includes('/signin?')) {
-        targetUrl = targetUrl.slice(targetUrl.indexOf('/signin?'))
-      }
-      trimSdk.openURL(targetUrl, '_blank')
-    } else {
-      message.error(res.message || '获取授权链接失败')
-    }
-  } catch (err: any) {
-    message.error(err?.message || '获取授权链接异常')
-  } finally {
-    startingSkillAuth.value = false
-  }
-}
-
-// 确认飞牛技能授权
-async function handleConfirmSkillAuth() {
-  if (!skillAuthCode.value.trim()) return
-  confirmingSkillAuth.value = true
-  try {
-    const res = await skillAuthApi.confirmAuth(skillAuthCode.value.trim())
-    if (res.success) {
-      message.success('飞牛技能授权绑定成功')
-      showSkillModal.value = false
-      skillAuthCode.value = ''
-      configStore.updateSkillAuthStatus({ authorized: true })
-    } else {
-      message.error(res.message || '技能授权验证失败')
-    }
-  } catch (err: any) {
-    message.error(err?.message || '技能授权验证异常')
-  } finally {
-    confirmingSkillAuth.value = false
-  }
-}
-
-// 解除飞牛技能授权
-async function handleSkillLogout() {
-  loggingOutSkill.value = true
-  try {
-    const res = await skillAuthApi.logout()
-    if (res.success) {
-      message.success('已解除技能授权')
-      configStore.updateSkillAuthStatus({ authorized: false })
-    } else {
-      message.error(res.message || '解除授权失败')
-    }
-  } catch (err: any) {
-    message.error(err?.message || '解除授权异常')
-  } finally {
-    loggingOutSkill.value = false
-  }
-}
-
 onMounted(() => {
   authStore.fetchAccountStatus(true)
   authStore.fetchAccountPool(true)
-  configStore.fetchConfig()
 })
 
 onActivated(() => {
   authStore.fetchAccountStatus(true)
   authStore.fetchAccountPool(true)
-  configStore.fetchConfig()
 })
 </script>

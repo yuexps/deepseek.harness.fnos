@@ -6,7 +6,6 @@ import { useWorkspaceStore } from './workspace'
 import { usePluginStore } from './plugin'
 import { useLogStore } from './log'
 import { useSnapshotStore } from './snapshot'
-import { useConfigStore } from './config'
 import { useAuthStore } from './auth'
 
 export const useAppStore = defineStore('app', () => {
@@ -26,7 +25,6 @@ export const useAppStore = defineStore('app', () => {
     const pluginStore = usePluginStore()
     const logStore = useLogStore()
     const snapshotStore = useSnapshotStore()
-    const configStore = useConfigStore()
     const authStore = useAuthStore()
 
     systemStore.startClock()
@@ -62,10 +60,6 @@ export const useAppStore = defineStore('app', () => {
 
     wsClient.on('log', (chunk) => {
       logStore.appendChunk(chunk)
-    })
-
-    wsClient.on('skill_auth', (data) => {
-      configStore.updateSkillAuthStatus(data)
     })
 
     wsClient.on('reconnected', () => {

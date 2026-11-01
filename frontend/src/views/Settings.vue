@@ -184,32 +184,6 @@
                 </n-form-item>
               </n-gi>
 
-              <!-- 飞牛官方内置技能开关 -->
-              <n-gi span="2">
-                <div class="mt-1 pt-3.5 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
-                  <div class="flex items-start sm:items-center justify-between gap-3">
-                    <div class="flex items-center gap-1.5">
-                      <span class="text-sm font-medium text-slate-800 dark:text-slate-100">飞牛官方 TRIM CLI 技能</span>
-                      <n-tooltip :trigger="isTouch ? 'click' : 'hover'">
-                        <template #trigger>
-                          <n-icon size="14"
-                            class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
-                            <Help />
-                          </n-icon>
-                        </template>
-                        自动向 DSH 注入飞牛官方命令行工具，提供 NAS 文件、存储、相册与系统状态管理能力
-                      </n-tooltip>
-                    </div>
-
-                    <n-switch v-model:value="config.enable_builtin_skill" size="medium"
-                      class="shrink-0 mt-0.5 sm:mt-0" />
-                  </div>
-
-                  <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                    启用后自动同步内置技能到 DSH 数据目录，支持通过自然语言操控 NAS。
-                  </div>
-                </div>
-              </n-gi>
             </n-grid>
           </n-card>
 
@@ -303,8 +277,8 @@
                 <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
                   重置为初始运行环境
                 </div>
-                <n-button type="error" size="small" secondary :loading="systemStore.isBuilding"
-                  :disabled="systemStore.isActionLocked" @click="handleRepairEnvironment"
+                <n-button type="error" size="small" secondary :loading="isBuilding"
+                  :disabled="isActionLocked" @click="handleRepairEnvironment"
                   class="shrink-0 !h-8 !px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95">
                   重置
                 </n-button>
@@ -357,6 +331,7 @@ import { useIsTouchDevice } from '../utils/device'
 
 const configStore = useConfigStore()
 const systemStore = useSystemStore()
+const { isBuilding, isActionLocked, isRunning } = storeToRefs(systemStore)
 const message = useMessage()
 const dialog = useDialog()
 const isTouch = useIsTouchDevice()
@@ -507,7 +482,7 @@ async function handleSave() {
   }
 
   // 端口、内存或 DSH 运行时代理变更时提示重启
-  if ((isServerPortChanged.value || isHeapMemoryChanged.value || isProxyDshChanged.value) && systemStore.isRunning) {
+  if ((isServerPortChanged.value || isHeapMemoryChanged.value || isProxyDshChanged.value) && isRunning.value) {
     const changes: string[] = []
     if (isServerPortChanged.value) {
       changes.push(`内部监听端口已由 ${savedConfig.value?.server_port || 2298} 变更为 ${config.value.server_port}`)
