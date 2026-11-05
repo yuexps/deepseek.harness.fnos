@@ -201,7 +201,7 @@
                           <Help />
                         </n-icon>
                       </template>
-                      最新版取 NPM 全量已发布版本的最高版本；稳定版取 NPM latest 标签版本
+                      latest、alpha、next 直接对应 DSH npm 包的 dist-tag；newest 取全量已发布版本中的最高版本
                     </n-tooltip>
                   </div>
                 </template>
@@ -269,22 +269,22 @@
             </div>
           </n-card>
 
-          <!-- 运行环境重置卡片 -->
+          <!-- 重置修复卡片 -->
           <n-card title="重置修复" :bordered="false"
             class="shadow-sm rounded-2xl border border-rose-100 dark:border-rose-950/40">
             <div class="space-y-2">
               <div class="flex items-center justify-between gap-3">
                 <div class="text-sm font-medium text-slate-800 dark:text-slate-100">
-                  重置为初始运行环境
+                  保留数据并干净部署当前 DSH 版本
                 </div>
                 <n-button type="error" size="small" secondary :loading="isBuilding"
-                  :disabled="isActionLocked" @click="handleRepairEnvironment"
+                  :disabled="isActionLocked" @click="handleRepairCurrent"
                   class="shrink-0 !h-8 !px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95">
                   重置
                 </n-button>
               </div>
               <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                适用于在线更新回退、插件冲突、服务崩溃或环境损坏等场景。重新部署应用内置的已适配版本，您的模型 API 密钥、历史会话记录与系统设置将完整保留。
+                适用于插件冲突、服务崩溃或运行环境损坏等场景。保留模型 API 密钥、历史会话记录与系统设置，清空运行环境并在线重装当前 DSH 版本。
               </div>
             </div>
           </n-card>
@@ -370,8 +370,10 @@ const npmRegistryOptions = [
 
 // 版本更新通道选项
 const updateChannelOptions = [
-  { label: '最新版', value: 'latest' },
-  { label: '稳定版', value: 'stable' }
+  { label: 'latest', value: 'latest' },
+  { label: 'alpha', value: 'alpha' },
+  { label: 'next', value: 'next' },
+  { label: 'newest', value: 'newest' }
 ]
 
 watch(isChanged, (changed) => {
@@ -453,8 +455,9 @@ const rules: FormRules = {
 }
 
 onMounted(async () => {
-  if (!configLoaded.value) {
-    await configStore.fetchConfig()
+  const hasValidUpdateChannel = updateChannelOptions.some((option) => option.value === config.value.update_channel)
+  if (!configLoaded.value || !hasValidUpdateChannel) {
+    await configStore.fetchConfig(true)
     if (loadError.value) {
       message.error('加载配置失败')
     }
@@ -519,16 +522,16 @@ function handleReset() {
   message.info('已取消修改')
 }
 
-// 重置运行环境确认弹窗
-function handleRepairEnvironment() {
+// 重置修复确认弹窗
+function handleRepairCurrent() {
   const cleanPlugins = ref(true)
   dialog.warning({
-    title: '确认重置运行环境？',
+    title: '确认重置修复？',
     content: () =>
       h('div', { class: 'space-y-3 pt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300' }, [
         h(
           'p',
-          '此操作将终止当前服务并重新部署应用内置的已适配版本。您的模型 API 密钥、历史会话记录与系统设置将完整保留。是否确认继续？'
+          '此操作将终止当前服务，清空 DSH 运行环境并在线重装当前版本。模型 API 密钥、历史会话记录与系统设置将完整保留。是否确认继续？'
         ),
         h(
           'div',
@@ -542,7 +545,7 @@ function handleRepairEnvironment() {
               h(
                 'span',
                 { class: 'text-[11px] text-slate-400 dark:text-slate-500' },
-                '建议开启以避免插件冲突并恢复纯净环境；如需保留请关闭'
+                '建议开启以避免插件冲突；如需保留已安装插件请关闭'
               )
             ]),
             h(NSwitch, {
@@ -555,14 +558,14 @@ function handleRepairEnvironment() {
           ]
         )
       ]),
-    positiveText: '确认重置',
+    positiveText: '确认修复',
     negativeText: '取消',
     onPositiveClick: async () => {
       const res = await systemStore.sendAction('repair', { keep_plugins: !cleanPlugins.value })
       if (res.success) {
-        message.success(res.message || '已开始重置运行环境…')
+        message.success(res.message || '已开始重置修复…')
       } else {
-        message.error(res.message || '重置运行环境失败')
+        message.error(res.message || '重置修复失败')
       }
     }
   })

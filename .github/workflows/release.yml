@@ -8,11 +8,6 @@ on:
         required: false
         type: boolean
         default: true
-      target_dsh_version:
-        description: '指定 @deepseek-ai/dsh 版本'
-        required: false
-        type: string
-        default: ''
 
 permissions:
   contents: write
@@ -22,179 +17,8 @@ env:
   BIN_NAME: deepseek.harness
 
 jobs:
-  build-runtime-amd64:
-    name: Prepare NPM Runtime (amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install and Package DSH Runtime (amd64)
-        run: |
-          mkdir -p /tmp/runtime-dist
-          cd /tmp/runtime-dist
-          
-          cat << 'EOF' > package.json
-          {
-            "name": "dsh-fnos-runtime",
-            "version": "1.0.0",
-            "private": true,
-            "description": "DeepSeek Harness runtime for fnOS"
-          }
-          EOF
-
-          TARGET_VER="${{ github.event.inputs.target_dsh_version }}"
-          if [ -z "$TARGET_VER" ]; then
-            TARGET_VER=$(node -e '
-              const { execSync } = require("child_process");
-              const raw = execSync("npm view @deepseek-ai/dsh versions --json", { encoding: "utf8" });
-              const list = JSON.parse(raw);
-              function parse(v) {
-                const m = v.trim().replace(/^[v^~]/, "").match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
-                if (!m) return null;
-                return { maj: +m[1], min: +m[2], pat: +m[3], pre: m[4] ? m[4].split(".") : [] };
-              }
-              function cmp(a, b) {
-                const p1 = parse(a), p2 = parse(b);
-                if (!p1 || !p2) return a.localeCompare(b);
-                if (p1.maj !== p2.maj) return p1.maj - p2.maj;
-                if (p1.min !== p2.min) return p1.min - p2.min;
-                if (p1.pat !== p2.pat) return p1.pat - p2.pat;
-                if (!p1.pre.length && p2.pre.length) return 1;
-                if (p1.pre.length && !p2.pre.length) return -1;
-                const max = Math.max(p1.pre.length, p2.pre.length);
-                for (let i = 0; i < max; i++) {
-                  if (i >= p1.pre.length) return -1;
-                  if (i >= p2.pre.length) return 1;
-                  const s1 = p1.pre[i], s2 = p2.pre[i];
-                  if (s1 === s2) continue;
-                  const n1 = /^\d+$/.test(s1) ? +s1 : null, n2 = /^\d+$/.test(s2) ? +s2 : null;
-                  if (n1 !== null && n2 !== null) return n1 - n2;
-                  if (n1 !== null && n2 === null) return -1;
-                  if (n1 === null && n2 !== null) return 1;
-                  return s1.localeCompare(s2);
-                }
-                return 0;
-              }
-              list.sort(cmp);
-              console.log(list[list.length - 1]);
-            ')
-          fi
-
-          TARGET_PKG="@deepseek-ai/dsh@$TARGET_VER"
-          echo "正在安装 amd64 官方 NPM 核心运行环境: $TARGET_PKG ..."
-          npm install "$TARGET_PKG" --save --prefer-offline --no-audit --no-fund
-
-          DSH_PKG_JSON="node_modules/@deepseek-ai/dsh/package.json"
-          if [ ! -f "$DSH_PKG_JSON" ]; then
-            echo "Error: 未找到 $DSH_PKG_JSON"
-            exit 1
-          fi
-
-          INSTALLED_DSH_VER=$(node -p "require('./$DSH_PKG_JSON').version")
-          echo "$INSTALLED_DSH_VER" > /tmp/version.txt
-          echo "DSH amd64 NPM Version: $INSTALLED_DSH_VER"
-
-          tar --numeric-owner -czf /tmp/deepseek-harness-amd64.tar.gz package.json package-lock.json node_modules
-
-      - name: Upload amd64 Runtime Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: harness-runtime-amd64
-          path: |
-            /tmp/deepseek-harness-amd64.tar.gz
-            /tmp/version.txt
-
-  build-runtime-arm64:
-    name: Prepare NPM Runtime (arm64)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install and Package DSH Runtime (arm64)
-        run: |
-          mkdir -p /tmp/runtime-dist
-          cd /tmp/runtime-dist
-          
-          cat << 'EOF' > package.json
-          {
-            "name": "dsh-fnos-runtime",
-            "version": "1.0.0",
-            "private": true,
-            "description": "DeepSeek Harness runtime for fnOS"
-          }
-          EOF
-
-          TARGET_VER="${{ github.event.inputs.target_dsh_version }}"
-          if [ -z "$TARGET_VER" ]; then
-            TARGET_VER=$(node -e '
-              const { execSync } = require("child_process");
-              const raw = execSync("npm view @deepseek-ai/dsh versions --json", { encoding: "utf8" });
-              const list = JSON.parse(raw);
-              function parse(v) {
-                const m = v.trim().replace(/^[v^~]/, "").match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
-                if (!m) return null;
-                return { maj: +m[1], min: +m[2], pat: +m[3], pre: m[4] ? m[4].split(".") : [] };
-              }
-              function cmp(a, b) {
-                const p1 = parse(a), p2 = parse(b);
-                if (!p1 || !p2) return a.localeCompare(b);
-                if (p1.maj !== p2.maj) return p1.maj - p2.maj;
-                if (p1.min !== p2.min) return p1.min - p2.min;
-                if (p1.pat !== p2.pat) return p1.pat - p2.pat;
-                if (!p1.pre.length && p2.pre.length) return 1;
-                if (p1.pre.length && !p2.pre.length) return -1;
-                const max = Math.max(p1.pre.length, p2.pre.length);
-                for (let i = 0; i < max; i++) {
-                  if (i >= p1.pre.length) return -1;
-                  if (i >= p2.pre.length) return 1;
-                  const s1 = p1.pre[i], s2 = p2.pre[i];
-                  if (s1 === s2) continue;
-                  const n1 = /^\d+$/.test(s1) ? +s1 : null, n2 = /^\d+$/.test(s2) ? +s2 : null;
-                  if (n1 !== null && n2 !== null) return n1 - n2;
-                  if (n1 !== null && n2 === null) return -1;
-                  if (n1 === null && n2 !== null) return 1;
-                  return s1.localeCompare(s2);
-                }
-                return 0;
-              }
-              list.sort(cmp);
-              console.log(list[list.length - 1]);
-            ')
-          fi
-
-          TARGET_PKG="@deepseek-ai/dsh@$TARGET_VER"
-          echo "正在安装 arm64 官方 NPM 核心运行环境: $TARGET_PKG ..."
-          npm install "$TARGET_PKG" --save --prefer-offline --no-audit --no-fund
-
-          DSH_PKG_JSON="node_modules/@deepseek-ai/dsh/package.json"
-          if [ ! -f "$DSH_PKG_JSON" ]; then
-            echo "Error: 未找到 $DSH_PKG_JSON"
-            exit 1
-          fi
-
-          INSTALLED_DSH_VER=$(node -p "require('./$DSH_PKG_JSON').version")
-          echo "$INSTALLED_DSH_VER" > /tmp/version.txt
-          echo "DSH arm64 NPM Version: $INSTALLED_DSH_VER"
-
-          tar --numeric-owner -czf /tmp/deepseek-harness-arm64.tar.gz package.json package-lock.json node_modules
-
-      - name: Upload arm64 Runtime Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: harness-runtime-arm64
-          path: |
-            /tmp/deepseek-harness-arm64.tar.gz
-            /tmp/version.txt
-
   build-and-release:
     name: Package and Release FPK
-    needs: [build-runtime-amd64, build-runtime-arm64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -214,18 +38,6 @@ jobs:
         with:
           go-version: '1.27.3'
 
-      - name: Download amd64 Runtime Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: harness-runtime-amd64
-          path: /tmp/amd64-dist
-
-      - name: Download arm64 Runtime Artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: harness-runtime-arm64
-          path: /tmp/arm64-dist
-
       - name: Build Frontend
         run: |
           cd frontend
@@ -240,12 +52,13 @@ jobs:
 
       - name: Build All FPK Packages (Parallel)
         run: |
-          # 1. 打包 x86 离线安装包（匹配 amd64 原生模块）
+          cp -r fnpack fnpack_base
+          rm -f fnpack_base/*.fpk
+
+          # 1. 打包 x86 安装包
           (
             mkdir -p fnpack_x86/app/bin
-            cp -r fnpack/* fnpack_x86/
-            cp /tmp/amd64-dist/version.txt fnpack_x86/app/.version
-            cp /tmp/amd64-dist/deepseek-harness-amd64.tar.gz fnpack_x86/app/deepseek-harness.tar.gz
+            cp -r fnpack_base/* fnpack_x86/
             cp /tmp/gobins/${{ env.BIN_NAME }}-amd64 fnpack_x86/app/bin/${{ env.BIN_NAME }}
             cd fnpack_x86
             chmod +x ${{ env.FNPACK_BIN }}
@@ -257,12 +70,10 @@ jobs:
           ) &
           PID_X86=$!
 
-          # 2. 打包 ARM 离线安装包（匹配 arm64 原生模块）
+          # 2. 打包 ARM 安装包
           (
             mkdir -p fnpack_arm/app/bin
-            cp -r fnpack/* fnpack_arm/
-            cp /tmp/arm64-dist/version.txt fnpack_arm/app/.version
-            cp /tmp/arm64-dist/deepseek-harness-arm64.tar.gz fnpack_arm/app/deepseek-harness.tar.gz
+            cp -r fnpack_base/* fnpack_arm/
             cp /tmp/gobins/${{ env.BIN_NAME }}-arm64 fnpack_arm/app/bin/${{ env.BIN_NAME }}
             sed -i 's/platform[[:space:]]*=[[:space:]]*x86/platform              = arm/g' fnpack_arm/manifest
             cd fnpack_arm
@@ -289,10 +100,7 @@ jobs:
         id: manifest
         run: |
           APP_VER=$(grep -E '^[[:space:]]*version[[:space:]]*=' fnpack/manifest | awk -F'=' '{gsub(/[ \t]/,"",$2); print $2}')
-          UPSTREAM_VER=$(cat /tmp/amd64-dist/version.txt 2>/dev/null || echo "latest")
           echo "version=$APP_VER" >> $GITHUB_OUTPUT
-          echo "upstream_ver=$UPSTREAM_VER" >> $GITHUB_OUTPUT
-          echo "Release version: $APP_VER, Upstream version: $UPSTREAM_VER"
 
       - name: Upload x86 FPK Artifact
         uses: actions/upload-artifact@v4
@@ -321,14 +129,13 @@ jobs:
           {
             echo "### 安装包说明"
             echo ""
-            echo "| 文件名 | 架构 | 说明 |"
-            echo "| :--- | :---: | :--- |"
-            echo "| \`deepseek.harness-x86.fpk\` | x86_64 | 内置运行环境与管理前端，开箱即用。 |"
-            echo "| \`deepseek.harness-arm.fpk\` | ARM64 | 内置运行环境与管理前端，开箱即用。 |"
+            echo "| 文件名 | 架构 |"
+            echo "| :--- | :---: |"
+            echo "| \`deepseek.harness-x86.fpk\` | x86_64 |"
+            echo "| \`deepseek.harness-arm.fpk\` | ARM64 |"
             echo ""
             echo "---"
             echo "- 应用版本：\`${CURR_TAG}\`"
-            echo "- DSH 版本：\`v${{ steps.manifest.outputs.upstream_ver }}\`"
             echo ""
             echo "### 更新日志"
             echo ""

@@ -6,7 +6,7 @@
       <h1 class="text-xl font-bold text-slate-800 dark:text-slate-100 tracking-tight shrink-0">概览</h1>
 
       <!-- 右侧部署时间 -->
-      <span v-if="statusData.build_time" class="text-xs font-mono text-slate-400 dark:text-slate-500 truncate"
+      <span v-if="statusData.build_time && statusData.build_time !== '-'" class="text-xs font-mono text-slate-400 dark:text-slate-500 truncate"
         :title="`Deploy: ${statusData.build_time}`">
         Deploy: {{ statusData.build_time }}
       </span>
@@ -25,20 +25,20 @@
                   {{ statusData.name || 'DeepSeek Harness' }}
                 </span>
                 <!-- 更新安装过程中的目标版本动态小徽章 -->
-                <n-tag v-if="isBuilding && targetVersion && statusData.version && statusData.version !== targetVersion"
+                <n-tag v-if="isBuilding && targetVersion"
                   type="info" size="small" round :bordered="false"
                   class="font-mono text-xs bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 font-semibold px-2 flex items-center gap-1 shadow-sm shrink-0">
                   <template #icon>
                     <n-spin :size="10" class="mr-0.5" />
                   </template>
-                  <span>{{ formatVersion(statusData.version) }}</span>
+                  <span>{{ statusData.version ? formatVersion(statusData.version) : '未部署' }}</span>
                   <span class="opacity-60">→</span>
                   <span>{{ formatVersion(targetVersion) }}</span>
                 </n-tag>
               </div>
               <div
                 class="text-xs sm:text-sm text-slate-400 dark:text-slate-500 flex items-center gap-1.5 sm:gap-2 flex-nowrap min-w-0">
-                <span class="shrink-0">版本: {{ formatVersion(statusData.version) }}</span>
+                <span class="shrink-0">版本: {{ statusData.version ? formatVersion(statusData.version) : '未部署' }}</span>
               </div>
             </div>
 
@@ -171,6 +171,30 @@
       </n-alert>
     </div>
 
+    <!-- 在线部署版本选择弹窗 -->
+    <n-modal v-model:show="showDeployModal" preset="dialog" type="info" title="在线部署 DSH" positive-text="开始部署"
+      negative-text="取消" :loading="isDeployConfirming"
+      :positive-button-props="{ disabled: !selectedDeployVersion }" @positive-click="confirmDeploy"
+      @negative-click="showDeployModal = false">
+      <div class="space-y-3 pt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+        <div class="space-y-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-slate-500 dark:text-slate-400">当前版本</span>
+            <span class="font-mono font-medium text-slate-700 dark:text-slate-200">
+              {{ formatVersion(deployVersions?.current_version || statusData.version) }}
+            </span>
+          </div>
+          <div class="space-y-1.5">
+            <span class="text-slate-500 dark:text-slate-400">选择版本：</span>
+            <n-select v-model:value="selectedDeployVersion" :options="deployVersionOptions" filterable
+              :loading="isLoadingDeployVersions" :disabled="isLoadingDeployVersions"
+              :status="deployVersionsError ? 'error' : undefined" :placeholder="deployVersionPlaceholder"
+              size="medium" class="w-full" @update:show="handleDeploySelectShow" />
+          </div>
+        </div>
+      </div>
+    </n-modal>
+
     <!-- 发现新版本升级确认弹窗 -->
     <n-modal v-model:show="showUpdateModal" preset="dialog" type="info" title="发现新版本" positive-text="立即更新"
       negative-text="暂不更新" :loading="isActionLocked" @positive-click="confirmUpgrade"
@@ -207,7 +231,7 @@
           </div>
           <div
             class="p-2 rounded-lg bg-white/70 dark:bg-black/20 border border-amber-500/20 text-[11px] text-amber-900 dark:text-amber-200 flex items-center justify-between gap-2">
-            <span>更新后若遇异常，可随时还原快照或重置。</span>
+            <span>更新后若遇异常，可随时还原快照或使用重置修复。</span>
             <n-button text type="warning" size="tiny" class="font-medium shrink-0" @click="goToSnapshots">
               前往快照 →
             </n-button>
@@ -233,6 +257,7 @@ import {
   NIcon,
   NTooltip,
   NModal,
+  NSelect,
   useMessage,
   useDialog
 } from 'naive-ui'
@@ -242,14 +267,14 @@ import {
   PlayerStop,
   Refresh,
   Download,
-  Tools,
+  CloudDownload,
   AlertTriangle
 } from '@vicons/tabler'
 import { useSystemStore } from '../stores/system'
 import { useAppStore } from '../stores/app'
 import { withAsyncLock } from '../utils/debounce'
 import { useIsTouchDevice } from '../utils/device'
-import type { CheckUpdateResult } from '../types/api'
+import type { CheckUpdateResult, DshVersionsResult } from '../types/api'
 
 const systemStore = useSystemStore()
 const appStore = useAppStore()
@@ -259,7 +284,17 @@ const isTouch = useIsTouchDevice()
 
 const showUpdateModal = ref(false)
 const updateInfo = ref<CheckUpdateResult | null>(null)
+const showDeployModal = ref(false)
+const deployVersions = ref<DshVersionsResult | null>(null)
+const selectedDeployVersion = ref('')
+const isDeployConfirming = ref(false)
+const isLoadingDeployVersions = ref(false)
+const deployVersionsError = ref(false)
 const targetVersion = computed(() => statusData.value.target_version || '')
+const deployVersionPlaceholder = computed(() => {
+  if (deployVersionsError.value) return '加载失败，展开重试'
+  return '选择版本'
+})
 
 function goToSnapshots() {
   showUpdateModal.value = false
@@ -294,6 +329,38 @@ function formatVersion(ver?: string): string {
   return v ? `v${v}` : '-'
 }
 
+function compareVersion(left: string, right: string): number {
+  const parse = (value: string) => {
+    const match = value.trim().replace(/^v/i, '').match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/)
+    if (!match) return null
+    return {
+      core: [Number(match[1]), Number(match[2]), Number(match[3])],
+      pre: match[4] ? match[4].split('.') : []
+    }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  if (!a || !b) return left.localeCompare(right)
+  for (let i = 0; i < 3; i++) {
+    if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]
+  }
+  if (!a.pre.length && b.pre.length) return 1
+  if (a.pre.length && !b.pre.length) return -1
+  const length = Math.max(a.pre.length, b.pre.length)
+  for (let i = 0; i < length; i++) {
+    if (i >= a.pre.length) return -1
+    if (i >= b.pre.length) return 1
+    if (a.pre[i] === b.pre[i]) continue
+    const aNum = /^\d+$/.test(a.pre[i]) ? Number(a.pre[i]) : null
+    const bNum = /^\d+$/.test(b.pre[i]) ? Number(b.pre[i]) : null
+    if (aNum !== null && bNum !== null) return aNum - bNum
+    if (aNum !== null) return -1
+    if (bNum !== null) return 1
+    return a.pre[i].localeCompare(b.pre[i])
+  }
+  return 0
+}
+
 interface ActionCard {
   action: string
   icon: Component
@@ -307,8 +374,15 @@ interface ActionCard {
 }
 
 const isRestarting = computed(() => activeAction.value === 'restart')
-const isRebuilding = computed(() => activeAction.value === 'rebuild' || (isBuilding.value && Boolean(statusData.value.last_message?.includes('重新部署'))))
-const isUpgrading = computed(() => activeAction.value === 'upgrade' || (isBuilding.value && !isRebuilding.value))
+const isDeploying = computed(() => activeAction.value === 'deploy' || activeAction.value === 'repair' || (isBuilding.value && Boolean(statusData.value.last_message?.includes('在线部署'))))
+const isUpgrading = computed(() => activeAction.value === 'upgrade' || (isBuilding.value && !isDeploying.value && Boolean(statusData.value.last_message?.includes('更新'))))
+const deployVersionOptions = computed(() => {
+  const currentVersion = deployVersions.value?.current_version || statusData.value.version || ''
+  const versions = deployVersions.value?.versions || []
+  return versions
+    .filter((version) => !currentVersion || compareVersion(version, currentVersion) >= 0)
+    .map((version) => ({ label: formatVersion(version), value: version }))
+})
 const showStopCard = computed(() => isRunning.value || isRestarting.value)
 
 const actionCards = computed<ActionCard[]>(() => [
@@ -326,8 +400,8 @@ const actionCards = computed<ActionCard[]>(() => [
     : {
       action: 'start',
       icon: PlayerPlay,
-      label: isStarting.value ? '服务启动中' : '启动服务',
-      desc: isStarting.value ? '正在拉起服务主进程并等待就绪…' : '拉起 DeepSeek Harness 后台核心服务',
+      label: isStarting.value ? '服务启动中' : ((!statusData.value.version || statusData.value.version === '-') ? '部署 DSH' : '启动服务'),
+      desc: isStarting.value ? '正在拉起服务主进程并等待就绪…' : ((!statusData.value.version || statusData.value.version === '-') ? '选择适配版本并在线部署 DSH' : '拉起 DeepSeekRuntime 后台核心服务'),
       iconBg: 'bg-emerald-50 dark:bg-emerald-950/30 group-hover:bg-emerald-100 dark:group-hover:bg-emerald-950/50',
       iconColor: 'text-emerald-600 dark:text-emerald-400',
       disabled: isActionLocked.value,
@@ -354,15 +428,14 @@ const actionCards = computed<ActionCard[]>(() => [
     loading: isCheckingUpdate.value || isUpgrading.value
   },
   {
-    action: 'rebuild',
-    icon: Tools,
-    label: '重新部署',
-    desc: '清空本地依赖缓存，重新在线安装当前版本 DSH',
+    action: 'deploy',
+    icon: CloudDownload,
+    label: '在线部署',
+    desc: '选择适配版本并在线部署 DSH',
     iconBg: 'bg-purple-50 dark:bg-purple-950/30 group-hover:bg-purple-100 dark:group-hover:bg-purple-950/50',
     iconColor: 'text-purple-600 dark:text-purple-400',
-    disabled: isActionLocked.value && !isRebuilding.value,
-    loading: isRebuilding.value,
-    confirmText: '此操作将清理本地依赖缓存并重新安装当前版本的 DSH，确定继续？'
+    disabled: isActionLocked.value,
+    loading: isDeploying.value
   }
 ])
 
@@ -376,7 +449,62 @@ const confirmUpgrade = async () => {
   }
 }
 
+async function loadDeployVersions() {
+  if (isLoadingDeployVersions.value) return
+  isLoadingDeployVersions.value = true
+  deployVersionsError.value = false
+  try {
+    const res = await systemStore.fetchDshVersions()
+    if (!res.success) {
+      deployVersionsError.value = true
+      message.error(res.message || '获取 DSH 版本列表失败')
+      return
+    }
+    deployVersions.value = res.data
+    const currentVersion = res.data.current_version
+    selectedDeployVersion.value = res.data.versions.includes(currentVersion)
+      ? currentVersion
+      : res.data.recommended_version
+  } finally {
+    isLoadingDeployVersions.value = false
+  }
+}
+
+async function openDeployDialog() {
+  showDeployModal.value = true
+  deployVersions.value = null
+  selectedDeployVersion.value = ''
+  await loadDeployVersions()
+}
+
+function handleDeploySelectShow(show: boolean) {
+  if (show && deployVersionsError.value) {
+    void loadDeployVersions()
+  }
+}
+
+async function confirmDeploy() {
+  if (!selectedDeployVersion.value || isDeployConfirming.value) return
+  isDeployConfirming.value = true
+  const res = await systemStore.sendAction('deploy', { target_version: selectedDeployVersion.value })
+  isDeployConfirming.value = false
+  if (res.success) {
+    showDeployModal.value = false
+    message.success(res.message || '已开始在线部署 DSH')
+  } else {
+    message.error(res.message || '在线部署启动失败')
+  }
+}
+
 const handleAction = withAsyncLock(async (action: string) => {
+  if (action === 'deploy') {
+    await openDeployDialog()
+    return
+  }
+  if (action === 'start' && !isRunning.value && (!statusData.value.version || statusData.value.version === '-')) {
+    await openDeployDialog()
+    return
+  }
   if (action === 'check_update') {
     const res = await systemStore.checkUpdate()
     if (!res.success) {

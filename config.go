@@ -61,10 +61,15 @@ func (c Config) GetNpmRegistry() string {
 }
 
 func (c Config) GetUpdateChannel() string {
-	if strings.EqualFold(strings.TrimSpace(c.UpdateChannel), "stable") {
-		return "stable"
+	channel := strings.ToLower(strings.TrimSpace(c.UpdateChannel))
+	switch channel {
+	case "latest", "alpha", "next", "newest":
+		return channel
+	case "stable":
+		return "latest"
+	default:
+		return "latest"
 	}
-	return "latest"
 }
 
 var (
@@ -90,9 +95,7 @@ func InitConfig() {
 		return
 	}
 	_ = json.Unmarshal(data, &globalConfig)
-	if globalConfig.UpdateChannel == "" {
-		globalConfig.UpdateChannel = "latest"
-	}
+	globalConfig.UpdateChannel = globalConfig.GetUpdateChannel()
 	if globalConfig.ProxyDshRuntime == nil {
 		globalConfig.ProxyDshRuntime = &defaultProxyDsh
 	}

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { StatusData, CheckUpdateResult, RequestResult } from '../types/api'
+import type { StatusData, CheckUpdateResult, DshVersionsResult, RequestResult } from '../types/api'
 import { systemApi, configApi } from '../api'
 import { trimSdk } from '../utils/trimSdk'
 import { usePluginStore } from './plugin'
@@ -23,6 +23,7 @@ export const useSystemStore = defineStore('system', () => {
   const serverTimeOffset = ref(0)
   const activeAction = ref<string | null>(null)
   const isCheckingUpdate = ref(false)
+  const isCheckingVersions = ref(false)
   const currentTime = ref(Date.now())
   const statusLoaded = ref(false)
 
@@ -104,9 +105,8 @@ export const useSystemStore = defineStore('system', () => {
         }
       } else if (
         activeAction.value === 'upgrade' ||
-        activeAction.value === 'rebuild' ||
-        activeAction.value === 'repair' ||
-        activeAction.value === 'reset'
+        activeAction.value === 'deploy' ||
+        activeAction.value === 'repair'
       ) {
         if (isTransitionToRunning || isFailedOrStopped) {
           clearActionLock()
@@ -194,6 +194,18 @@ export const useSystemStore = defineStore('system', () => {
     }
   }
 
+  async function fetchDshVersions(): Promise<RequestResult<DshVersionsResult>> {
+    if (isCheckingVersions.value) {
+      return { success: false, message: '正在获取版本列表，请稍候' }
+    }
+    isCheckingVersions.value = true
+    try {
+      return await systemApi.getDshVersions()
+    } finally {
+      isCheckingVersions.value = false
+    }
+  }
+
   async function openHarnessApp(): Promise<void> {
     const res = await configApi.getConfig()
     const cfg = res.success ? res.data : null
@@ -244,6 +256,7 @@ export const useSystemStore = defineStore('system', () => {
     serverTimeOffset,
     activeAction,
     isCheckingUpdate,
+    isCheckingVersions,
     isActionLocked,
     isRunning,
     isStarting,
@@ -262,6 +275,7 @@ export const useSystemStore = defineStore('system', () => {
     fetchInitialStatus,
     sendAction,
     checkUpdate,
+    fetchDshVersions,
     openHarnessApp
   }
 }, {

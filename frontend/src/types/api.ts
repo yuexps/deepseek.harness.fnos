@@ -25,7 +25,7 @@ export type ServiceStatus = 'stopped' | 'starting' | 'running' | 'building' | 's
  */
 export interface StatusData {
   name: string
-  version: string
+  version?: string
   app_version?: string
   app_remote_version?: string
   app_has_update?: boolean
@@ -51,6 +51,16 @@ export interface CheckUpdateResult {
   current_version?: string
   remote_version?: string
   message: string
+}
+
+/**
+ * 在线部署可选版本
+ */
+export interface DshVersionsResult {
+  current_version: string
+  versions: string[]
+  recommended_version: string
+  min_version: string
 }
 
 /**
@@ -148,7 +158,7 @@ export interface SettingsConfig {
   network_proxy: string
   proxy_dsh_runtime?: boolean
   npm_registry?: string
-  update_channel?: 'latest' | 'stable'
+  update_channel?: 'latest' | 'alpha' | 'next' | 'newest'
   access_mode?: 'fngateway' | 'port' | 'custom'
   reverse_proxy_url: string
   access_password: string

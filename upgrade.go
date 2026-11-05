@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 const (
 	dshPackageName = "@deepseek-ai/dsh"
 	nodeBinDir     = "/var/apps/nodejs_v24/target/bin"
+	minDshVersion  = "0.2.1-rc.1"
 )
 
 func findBin(preferred, fallback string) string {
@@ -53,8 +55,8 @@ func installPnpm() error {
 	args := []string{"install", "pnpm", "--no-audit", "--no-fund", "--registry=" + cfg.GetNpmRegistry()}
 	cmd := exec.Command(npmBin(), args...)
 	cmd.Dir = pnpmDir
-	cmd.Stdout = NewLogWriterInfo()
-	cmd.Stderr = NewLogWriterWarn()
+	cmd.Stdout = NewLogWriter()
+	cmd.Stderr = NewLogWriter()
 	if cfg.NetworkProxy != "" && strings.Contains(cfg.GetNpmRegistry(), "npmjs.org") {
 		cmd.Env = append(os.Environ(),
 			"HTTP_PROXY="+cfg.NetworkProxy,
@@ -72,6 +74,14 @@ func installPnpm() error {
 	return nil
 }
 
+// DshVersionsResult 在线部署可选版本
+type DshVersionsResult struct {
+	CurrentVersion     string   `json:"current_version"`
+	Versions           []string `json:"versions"`
+	RecommendedVersion string   `json:"recommended_version"`
+	MinVersion         string   `json:"min_version"`
+}
+
 // CheckUpdateResult 检查更新返回结构
 type CheckUpdateResult struct {
 	HasUpdate      bool   `json:"has_update"`
@@ -85,7 +95,7 @@ type npmPackageInfo struct {
 	Time     map[string]string `json:"time"`
 }
 
-// fetchRemoteNpmInfo 查询包的发布时间与 Tag 元数据
+// fetchRemoteNpmInfo 查询包的版本元数据
 func fetchRemoteNpmInfo(pkgName string) (*npmPackageInfo, error) {
 	cfg := GetConfig()
 	reg := strings.TrimRight(cfg.GetNpmRegistry(), "/")
@@ -114,7 +124,7 @@ func fetchRemoteNpmInfo(pkgName string) (*npmPackageInfo, error) {
 	if err == nil && resp.StatusCode == http.StatusOK {
 		defer resp.Body.Close()
 		var info npmPackageInfo
-		if err := json.NewDecoder(resp.Body).Decode(&info); err == nil && (len(info.Time) > 0 || len(info.DistTags) > 0) {
+		if err := json.NewDecoder(resp.Body).Decode(&info); err == nil && (len(info.DistTags) > 0 || len(info.Time) > 0) {
 			return &info, nil
 		}
 	}
@@ -144,32 +154,83 @@ func fetchRemoteNpmInfo(pkgName string) (*npmPackageInfo, error) {
 	return &info, nil
 }
 
-// resolveTargetVersion 依据更新渠道解析目标版本：
-// - stable: 取 NPM 的 dist-tags.latest
-// - latest: 取 NPM 所有版本中的最高版本
+// collectAdaptedVersions 过滤并按语义化版本降序返回适配版本。
+func collectAdaptedVersions(info *npmPackageInfo) []string {
+	if info == nil {
+		return nil
+	}
+
+	versions := make([]string, 0, len(info.Time))
+	for ver := range info.Time {
+		cleanVer := strings.TrimPrefix(strings.TrimSpace(ver), "v")
+		if _, ok := parseSemver(cleanVer); !ok || CompareSemver(cleanVer, minDshVersion) < 0 {
+			continue
+		}
+		versions = append(versions, cleanVer)
+	}
+	sort.Slice(versions, func(i, j int) bool {
+		return CompareSemver(versions[i], versions[j]) > 0
+	})
+	return versions
+}
+
+// ListDshVersions 返回在线部署可选择的适配版本。
+func ListDshVersions() (*DshVersionsResult, error) {
+	info, err := fetchRemoteNpmInfo(dshPackageName)
+	if err != nil {
+		return nil, fmt.Errorf("获取 DSH 版本列表失败: %w", err)
+	}
+	versions := collectAdaptedVersions(info)
+	currentVersion := strings.TrimPrefix(strings.TrimSpace(readVersion()), "v")
+	if _, ok := parseSemver(currentVersion); ok {
+		upgradable := make([]string, 0, len(versions))
+		for _, version := range versions {
+			if CompareSemver(version, currentVersion) >= 0 {
+				upgradable = append(upgradable, version)
+			}
+		}
+		versions = upgradable
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("未找到可部署版本 (最低 v%s)", minDshVersion)
+	}
+
+	return &DshVersionsResult{
+		CurrentVersion:     currentVersion,
+		Versions:           versions,
+		RecommendedVersion: versions[0],
+		MinVersion:         minDshVersion,
+	}, nil
+}
+
+// resolveTargetVersion 依据更新通道解析目标版本。
 func resolveTargetVersion(info *npmPackageInfo, channel string) string {
 	if info == nil {
 		return ""
 	}
 
-	if channel == "stable" {
-		if latest, ok := info.DistTags["latest"]; ok && latest != "" {
-			return strings.TrimPrefix(strings.TrimSpace(latest), "v")
+	if channel == "newest" {
+		var maxVer string
+		for ver := range info.Time {
+			if ver == "modified" || ver == "created" {
+				continue
+			}
+			cleanVer := strings.TrimPrefix(strings.TrimSpace(ver), "v")
+			if _, ok := parseSemver(cleanVer); !ok {
+				continue
+			}
+			if maxVer == "" || CompareSemver(cleanVer, maxVer) > 0 {
+				maxVer = cleanVer
+			}
 		}
-		return ""
+		return maxVer
 	}
 
-	var maxVer string
-	for ver := range info.Time {
-		if ver == "modified" || ver == "created" {
-			continue
-		}
-		cleanVer := strings.TrimPrefix(strings.TrimSpace(ver), "v")
-		if maxVer == "" || CompareSemver(cleanVer, maxVer) > 0 {
-			maxVer = cleanVer
-		}
+	ver, ok := info.DistTags[channel]
+	if !ok {
+		return ""
 	}
-	return maxVer
+	return strings.TrimPrefix(strings.TrimSpace(ver), "v")
 }
 
 func formatVersionTag(ver string) string {
@@ -228,16 +289,28 @@ func CheckUpdate() (*CheckUpdateResult, error) {
 	}, nil
 }
 
-// Upgrade 触发在线版本升级
+// Upgrade 按更新通道升级 DSH
 func Upgrade() {
 	state.SetStatus(StatusBuilding, "正在准备更新核心服务...")
-	go update(false)
+	go update()
 }
 
-// Rebuild 触发强制重新部署 DSH
-func Rebuild() {
-	state.SetStatus(StatusBuilding, "正在准备重新部署核心服务...")
-	go update(true)
+// DeployVersion 按指定适配版本在线部署 DSH。
+func DeployVersion(targetVersion string) {
+	state.SetStatus(StatusBuilding, "正在准备在线部署核心服务...")
+	go deployVersion(targetVersion, true, false)
+}
+
+// RepairCurrent 保留数据并干净重装当前 DSH 版本。
+func RepairCurrent(keepPlugins bool) {
+	state.SetStatus(StatusBuilding, "正在准备重置修复当前版本...")
+	go func() {
+		targetVersion := strings.TrimPrefix(strings.TrimSpace(GetConfig().Version), "v")
+		if targetVersion == "" || targetVersion == "-" {
+			targetVersion = strings.TrimPrefix(strings.TrimSpace(readVersion()), "v")
+		}
+		deployVersion(targetVersion, keepPlugins, true)
+	}()
 }
 
 // safeRemoveAll 安全递归删除文件与目录，遇到只读权限文件时自动解除只读以彻底清理
@@ -254,45 +327,15 @@ func safeRemoveAll(path string) error {
 	return os.RemoveAll(path)
 }
 
-// RepairEnvironment 恢复出厂设置：清空第三方插件与配置，重新部署纯净运行环境
-func RepairEnvironment(keepPlugins bool) {
-	state.SetStatus(StatusBuilding, "正在准备重置运行环境...")
-	go repairEnvironment(keepPlugins)
-}
-
-func repairEnvironment(keepPlugins bool) {
-	tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
-	if _, err := os.Stat(tarPath); err != nil {
-		LogWarning("[升级] 恢复出厂设置失败: 未检测到内置离线安装包 (%s)", tarPath)
-		state.SetStatus(StatusStopped, "恢复出厂设置失败: 未检测到内置离线安装包")
-		return
-	}
-
-	stopAndWait()
-	if !keepPlugins {
-		ResetAllProfilePatches()
-	}
-
-	state.SetStatus(StatusBuilding, "正在清空工作区并还原运行环境...")
-	LogInfo("[升级] 开始重置运行环境（清理第三方插件与挂载，保留服务凭据与配置）")
-
-	zipVer := readAppDestVersion()
-	deployBuiltinPackage(tarPath, zipVer, false)
-}
-
-// installDshFromNpm 通过 npm install 安装指定版本或最新版 DSH 运行时
+// installDshFromNpm 通过 npm 安装指定版本的 DSH 运行时
 func installDshFromNpm(targetVersion string) error {
 	_ = os.MkdirAll(runtimeDir, 0755)
 
-	pkgSpec := dshPackageName
-	if targetVersion != "" {
-		pkgSpec = fmt.Sprintf("%s@%s", dshPackageName, targetVersion)
-	} else if info, err := fetchRemoteNpmInfo(dshPackageName); err == nil && info != nil {
-		channel := GetConfig().GetUpdateChannel()
-		if bestVer := resolveTargetVersion(info, channel); bestVer != "" {
-			pkgSpec = fmt.Sprintf("%s@%s", dshPackageName, bestVer)
-		}
+	targetVersion = strings.TrimPrefix(strings.TrimSpace(targetVersion), "v")
+	if targetVersion == "" {
+		return fmt.Errorf("目标版本不能为空")
 	}
+	pkgSpec := fmt.Sprintf("%s@%s", dshPackageName, targetVersion)
 
 	cfg := GetConfig()
 	args := []string{
@@ -310,8 +353,8 @@ func installDshFromNpm(targetVersion string) error {
 	LogInfo("[升级] 执行包安装命令: npm %s", strings.Join(args, " "))
 	cmd := exec.Command(npmBin(), args...)
 	cmd.Dir = runtimeDir
-	cmd.Stdout = NewLogWriterInfo()
-	cmd.Stderr = NewLogWriterWarn()
+	cmd.Stdout = NewLogWriter()
+	cmd.Stderr = NewLogWriter()
 
 	cmdEnv := append([]string{}, os.Environ()...)
 	if cfg.NetworkProxy != "" && strings.Contains(cfg.GetNpmRegistry(), "npmjs.org") {
@@ -338,37 +381,70 @@ func installDshFromNpm(targetVersion string) error {
 	return nil
 }
 
-func update(forceRebuild bool) {
-	stopAndWait()
+func validateDeployVersion(targetVersion string) error {
+	if _, ok := parseSemver(targetVersion); !ok {
+		return fmt.Errorf("目标版本格式无效")
+	}
+	if CompareSemver(targetVersion, minDshVersion) < 0 {
+		return fmt.Errorf("最低支持 v%s", minDshVersion)
+	}
 
-	if forceRebuild {
-		// 重新部署：安装 config.json 中记录的当前版本
-		targetVer := strings.TrimPrefix(strings.TrimSpace(GetConfig().Version), "v")
-		if targetVer == "" || targetVer == "-" {
-			LogWarning("[升级] 重新部署失败: 配置文件中未记录有效的当前版本")
-			state.SetStatus(StatusStopped, "重新部署失败: 配置文件未记录当前版本")
-			return
+	info, err := fetchRemoteNpmInfo(dshPackageName)
+	if err != nil {
+		return err
+	}
+	for _, version := range collectAdaptedVersions(info) {
+		if version == targetVersion {
+			currentVersion := strings.TrimPrefix(strings.TrimSpace(readVersion()), "v")
+			if _, ok := parseSemver(currentVersion); ok && CompareSemver(targetVersion, currentVersion) < 0 {
+				return fmt.Errorf("不允许降级 (当前 v%s)", currentVersion)
+			}
+			return nil
 		}
+	}
+	return fmt.Errorf("v%s 不存在或未适配", targetVersion)
+}
 
-		state.SetStatus(StatusBuilding, fmt.Sprintf("正在重新部署核心服务 (v%s)...", targetVer))
-		state.SetTargetVersion(targetVer)
-
-		_ = safeRemoveAll(filepath.Join(runtimeDir, "node_modules"))
-
-		if err := installDshFromNpm(targetVer); err != nil {
-			LogWarning("[升级] 重新部署失败: %s", err)
-			state.SetStatus(StatusStopped, "重新部署失败: "+err.Error())
-			return
-		}
-
-		verAfter := readVersion()
-		LogInfo("[升级] 核心服务重新部署成功: v%s", verAfter)
-		refreshVersion()
-		SetBuildTime(time.Now())
-		state.SetStatus(StatusStopped, "")
-		restartService()
+func deployVersion(targetVersion string, keepPlugins bool, isClean bool) {
+	targetVersion = strings.TrimPrefix(strings.TrimSpace(targetVersion), "v")
+	if err := validateDeployVersion(targetVersion); err != nil {
+		state.SetStatus(StatusStopped, "部署失败: "+err.Error())
 		return
 	}
+
+	stopAndWait()
+	if !keepPlugins {
+		ResetAllProfilePatches()
+	}
+
+	if isClean {
+		state.SetStatus(StatusBuilding, fmt.Sprintf("正在重置修复核心服务 (v%s)...", targetVersion))
+	} else {
+		state.SetStatus(StatusBuilding, fmt.Sprintf("正在在线部署核心服务 (v%s)...", targetVersion))
+	}
+	state.SetTargetVersion(targetVersion)
+	if isClean {
+		_ = safeRemoveAll(runtimeDir)
+	} else {
+		_ = safeRemoveAll(filepath.Join(runtimeDir, "node_modules"))
+	}
+
+	if err := installDshFromNpm(targetVersion); err != nil {
+		LogWarning("[升级] 部署失败: %s", err)
+		state.SetStatus(StatusStopped, "部署失败: "+err.Error())
+		return
+	}
+
+	verAfter := readVersion()
+	LogInfo("[升级] 核心服务部署成功: v%s", verAfter)
+	refreshVersion()
+	SetBuildTime(time.Now())
+	state.SetStatus(StatusStopped, "")
+	restartService()
+}
+
+func update() {
+	stopAndWait()
 
 	// 检查更新与在线升级：检测 NPM 上游最新发布版本
 	info, err := fetchRemoteNpmInfo(dshPackageName)
@@ -426,8 +502,8 @@ func extractTarGz(tarPath, dst string) error {
 		return err
 	}
 	cmd := exec.Command("tar", "--no-same-owner", "-xzf", tarPath, "-C", dst)
-	cmd.Stdout = NewLogWriterInfo()
-	cmd.Stderr = NewLogWriterWarn()
+	cmd.Stdout = NewLogWriter()
+	cmd.Stderr = NewLogWriter()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("解压 tar.gz 失败: %w", err)
 	}
@@ -463,12 +539,4 @@ func readVersion() string {
 		return ""
 	}
 	return pkg.Version
-}
-
-func readAppDestVersion() string {
-	data, err := os.ReadFile(filepath.Join(globalAppDest, ".version"))
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }

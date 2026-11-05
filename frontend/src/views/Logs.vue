@@ -8,10 +8,13 @@
 
       <!-- 右侧操作栏：自动滚动 / 下载 / 清空 -->
       <n-flex :size="8" align="center" :wrap="false" class="shrink-0">
+        <!-- 日志等级筛选 -->
+        <n-select v-model:value="levelFilter" :options="levelOptions" size="small"
+          class="!w-[88px] shrink-0" />
         <!-- 自动滚动开关 -->
         <n-button size="small" secondary @click="autoScroll = !autoScroll" class="!h-8 rounded-lg text-xs font-medium">
           <div class="flex items-center gap-1.5">
-            <span>自动滚动</span>
+            <span>自滚</span>
             <n-switch :value="autoScroll" size="small" @click.stop="autoScroll = !autoScroll" />
           </div>
         </n-button>
@@ -44,7 +47,7 @@
     <div ref="logContainerRef"
       class="relative flex-1 min-h-0 flex flex-col w-full h-full bg-slate-50 dark:bg-[#12141a] rounded-2xl border border-slate-200/80 dark:border-white/[0.08] shadow-sm overflow-hidden">
       <!-- Naive UI 原生日志组件：自适应撑满容器并在内部滚动，支持 highlight.js 语法高亮与鼠标划选复制 -->
-      <n-log ref="logInstRef" :log="displayedText" :hljs="hljs" language="harness-log" :font-size="12"
+      <n-log ref="logInstRef" :log="filteredLogText" :hljs="hljs" language="harness-log" :font-size="12"
         :line-height="1.5" trim class="flex-1 min-h-0 w-full p-3 sm:p-4 select-text cursor-text overflow-hidden"
         style="height: 100%;" />
 
@@ -83,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onActivated, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import {
   NSwitch,
@@ -93,6 +96,7 @@ import {
   NTooltip,
   NLog,
   NSpin,
+  NSelect,
   useMessage,
   useDialog,
   type LogInst
@@ -120,6 +124,11 @@ hljs.registerLanguage('harness-log', () => ({
     {
       className: 'meta',
       begin: /\[INFO\]/
+    },
+    // 无等级原生输出
+    {
+      className: 'comment',
+      begin: /\[None\]/
     },
     // 时间戳
     {
@@ -149,6 +158,31 @@ const message = useMessage()
 const dialog = useDialog()
 const isTouch = useIsTouchDevice()
 const { displayedText, logAutoScroll: autoScroll, fetching } = storeToRefs(logStore)
+const levelFilter = ref('ALL')
+const levelOptions = [
+  { label: 'ALL', value: 'ALL' },
+  { label: 'INFO', value: 'INFO' },
+  { label: 'WARN', value: 'WARN' },
+  { label: 'ERROR', value: 'ERROR' },
+  { label: 'FATAL', value: 'FATAL' },
+  { label: 'None', value: 'None' }
+]
+const filteredLogText = computed(() => {
+  if (levelFilter.value === 'ALL') return displayedText.value
+  const levels: Record<string, string[]> = {
+    INFO: ['INFO'],
+    WARN: ['WARN', 'WARNING'],
+    ERROR: ['ERROR'],
+    FATAL: ['FATAL'],
+    None: ['None']
+  }
+  const lines = displayedText.value.split('\n')
+  const markers = levels[levelFilter.value]
+  if (!markers) return displayedText.value
+  return lines
+    .filter((line) => markers.some((level) => line.includes(`[${level}]`)))
+    .join('\n')
+})
 
 const logInstRef = ref<LogInst | null>(null)
 const logContainerRef = ref<HTMLElement | null>(null)

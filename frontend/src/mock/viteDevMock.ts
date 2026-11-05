@@ -20,6 +20,7 @@ export function viteDevMock(): Plugin {
         network_proxy: '',
         proxy_dsh_runtime: false,
         npm_registry: 'https://registry.npmmirror.com',
+        update_channel: 'latest',
         access_mode: 'fngateway',
         reverse_proxy_url: '',
         access_password: '',
@@ -374,13 +375,14 @@ export function viteDevMock(): Plugin {
             return sendJson(res, 0, '服务正在重启', getStatusPayload())
           }
 
-          if (action === 'upgrade' || action === 'rebuild') {
-            const isRebuild = action === 'rebuild'
-            const nextVersion = isRebuild ? (config.version || '0.1.4') : '0.1.5-alpha.2'
+          if (action === 'upgrade' || action === 'deploy' || action === 'repair') {
+            const isDeploy = action === 'deploy'
+            const isRepair = action === 'repair'
+            const nextVersion = isDeploy ? String(body.target_version || '') : (isRepair ? (config.version || '0.1.4') : '0.1.5-alpha.2')
             status = 'building'
             targetVersion = nextVersion
-            lastMessage = isRebuild ? `正在重新部署 DSH (v${nextVersion})...` : '正在拉取远程更新并部署...'
-            appendLog(`[INFO] 开始执行 ${isRebuild ? '重新部署 DSH (当前版本)' : '版本更新'}`)
+            lastMessage = isDeploy ? '正在在线部署 DSH...' : (isRepair ? '正在重置修复当前版本...' : '正在拉取远程更新并部署...')
+            appendLog('[INFO] 开始执行 ' + (isDeploy ? '在线部署 DSH' : (isRepair ? '重置修复当前版本' : '版本更新')))
             broadcast('status', getStatusPayload())
 
             setTimeout(() => {
@@ -405,12 +407,22 @@ export function viteDevMock(): Plugin {
               }, 1000)
             }, 1000)
 
-            return sendJson(res, 0, isRebuild ? '开始重新部署 DSH…' : '已开始部署更新', getStatusPayload())
+            return sendJson(res, 0, isDeploy ? '开始在线部署 DSH…' : (isRepair ? '开始重置修复当前 DSH 版本…' : '已开始部署更新'), getStatusPayload())
           }
 
           return sendJson(res, 0, '操作成功', getStatusPayload())
         }
 
+        // 在线部署版本列表
+        if (path.endsWith('/api/deploy/versions') && req.method === 'GET') {
+          await new Promise((r) => setTimeout(r, 500))
+          return sendJson(res, 0, 'success', {
+            current_version: config.version || '-',
+            versions: ['0.2.2-rc.1', '0.2.2-alpha.3', '0.2.1-rc.5', '0.2.1-rc.4', '0.2.1-rc.3', '0.2.1-rc.2', '0.2.1-rc.1'],
+            recommended_version: '0.2.2-rc.1',
+            min_version: '0.2.1-rc.1'
+          })
+        }
         // 检查远程更新
         if (path.endsWith('/api/check-update') && req.method === 'GET') {
           await new Promise((r) => setTimeout(r, 600))
@@ -841,5 +853,3 @@ export function viteDevMock(): Plugin {
     }
   }
 }
-
-

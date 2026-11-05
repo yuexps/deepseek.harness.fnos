@@ -137,64 +137,6 @@ func isRuntimeReady() bool {
 	return false
 }
 
-// EvaluateDeploymentPolicy 判定是否需要部署或升级内置离线包
-func EvaluateDeploymentPolicy(tarPath string) (shouldDeploy bool, isUpgrade bool, reason string) {
-	if _, err := os.Stat(tarPath); err != nil {
-		return false, false, "内置离线安装包不存在"
-	}
-
-	zipVer := readAppDestVersion()
-	installedVer := readVersion()
-
-	// 运行环境未就绪时执行初始化或自愈部署
-	if !isRuntimeReady() {
-		return true, false, fmt.Sprintf("运行环境未就绪，准备部署内置安装包 (v%s)", zipVer)
-	}
-
-	// 仅在安装包版本高于本地运行版本时执行升级
-	if zipVer != "" && installedVer != "" && CompareSemver(zipVer, installedVer) > 0 {
-		return true, true, fmt.Sprintf("检测到新版本安装包 (v%s → v%s)，准备升级部署", installedVer, zipVer)
-	}
-
-	// 默认保留本地运行环境与在线更新
-	if installedVer != "" {
-		return false, false, fmt.Sprintf("本地运行版本 (v%s) 已就绪，跳过离线包解压", installedVer)
-	}
-	return false, false, "本地运行环境已就绪，跳过离线包解压"
-}
-
-// deployBuiltinPackage 部署安装包内置离线包并拉起服务
-func deployBuiltinPackage(tarPath, zipVer string, isUpgrade bool) {
-	state.SetStatus(StatusBuilding, "正在准备部署运行环境...")
-	go func() {
-		installedVer := readVersion()
-		if isUpgrade && installedVer != "" && zipVer != "" {
-			state.SetStatus(StatusBuilding, fmt.Sprintf("正在升级运行环境 (v%s → v%s)...", installedVer, zipVer))
-			LogInfo("[部署] 部署新版离线安装包 (v%s → v%s)", installedVer, zipVer)
-		} else {
-			state.SetStatus(StatusBuilding, "正在部署内置运行环境...")
-			LogInfo("[部署] 部署内置离线安装包 (v%s)", zipVer)
-		}
-
-		_ = safeRemoveAll(runtimeDir)
-
-		if err := extractTarGz(tarPath, runtimeDir); err != nil {
-			LogWarning("[部署] 解压离线安装包失败: %s", err)
-			state.SetStatus(StatusStopped, "解压离线包失败: "+err.Error())
-			return
-		}
-
-		refreshVersion()
-		SetBuildTime(time.Now())
-		go installPnpm()
-		state.SetStatus(StatusStopped, "")
-		LogInfo("[核心] 运行环境部署完成，拉起服务")
-		if err := Start(); err != nil {
-			LogWarning("[核心] 服务启动失败: %s", err)
-		}
-	}()
-}
-
 // migrateFromGitToNpm 检测并清理旧版 Git 源码环境
 func migrateFromGitToNpm() {
 	legacySrcDir := filepath.Join(globalPkgVar, "src")
@@ -223,41 +165,12 @@ func InitHarness() {
 	StartUsageSampler()
 	migrateFromGitToNpm()
 
-	tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
-	zipVer := readAppDestVersion()
-
-	// 评估内置离线包部署决策
-	if _, err := os.Stat(tarPath); err == nil {
-		shouldDeploy, isUpgrade, reason := EvaluateDeploymentPolicy(tarPath)
-		if shouldDeploy {
-			LogInfo("[部署] %s", reason)
-			deployBuiltinPackage(tarPath, zipVer, isUpgrade)
-			return
-		}
-		LogInfo("[部署] %s", reason)
-	} else if !isRuntimeReady() {
-		// 未内置压缩包且本地无运行时，自动安装部署
-		state.SetStatus(StatusBuilding, "正在部署核心运行环境...")
-		LogInfo("[部署] 未检测到离线安装包，执行在线安装核心服务: %s", dshPackageName)
-		go func() {
-			_ = safeRemoveAll(runtimeDir)
-			if err := installDshFromNpm(""); err != nil {
-				LogWarning("[部署] 在线安装核心服务失败: %s", err)
-				state.SetStatus(StatusStopped, "安装失败: "+err.Error())
-				return
-			}
-			refreshVersion()
-			state.SetStatus(StatusStopped, "")
-			LogInfo("[核心] 核心环境部署完成，拉起服务")
-			if err := Start(); err != nil {
-				LogWarning("[核心] 服务启动失败: %s", err)
-			}
-		}()
-		return
-	}
-
 	// 常规启动并按上次状态自启
 	refreshVersion()
+	if !isRuntimeReady() {
+		state.SetStatus(StatusStopped, "DSH 运行环境未部署，请选择适配版本在线部署")
+		return
+	}
 	go installPnpm()
 	if GetLastRunState() == StatusRunning {
 		LogInfo("[核心] 恢复上次运行状态 (running)，拉起服务")
@@ -458,7 +371,7 @@ func startLocked() error {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = runtimeDir
 	cmd.Stdout = &tokenCaptureWriter{
-		inner: NewLogWriterInfo(),
+		inner: NewLogWriter(),
 		onLine: func(line string) {
 			if m := launchTokenRe.FindStringSubmatch(line); len(m) > 1 {
 				tok := m[1]
@@ -467,7 +380,7 @@ func startLocked() error {
 			}
 		},
 	}
-	cmd.Stderr = NewLogWriterWarn()
+	cmd.Stderr = NewLogWriter()
 	setProcessGroup(cmd)
 
 	ApplyProxyEnv()

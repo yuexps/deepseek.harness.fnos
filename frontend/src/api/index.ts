@@ -2,6 +2,7 @@ import { http } from '../utils/http'
 import type {
   StatusData,
   CheckUpdateResult,
+  DshVersionsResult,
   WorkspaceData,
   PluginListPayload,
   PluginStatus,
@@ -21,7 +22,8 @@ import type {
 export const systemApi = {
   getStatus: () => http.get<StatusData>('config'),
   checkUpdate: () => http.get<CheckUpdateResult>('check-update'),
-  sendAction: (action: 'start' | 'stop' | 'restart' | 'upgrade' | 'rebuild' | 'repair' | 'reset' | string, payload?: Record<string, unknown>) =>
+  getDshVersions: () => http.get<DshVersionsResult>('deploy/versions'),
+  sendAction: (action: 'start' | 'stop' | 'restart' | 'upgrade' | 'deploy' | 'repair' | string, payload?: Record<string, unknown>) =>
     http.post<StatusData>('action', { action, ...payload })
 }
 

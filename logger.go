@@ -157,7 +157,31 @@ func SubscribeLog(buf int) (<-chan string, func()) {
 func writeLogEntry(level, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	entry := fmt.Sprintf("%s [%-5s] %s\n", timestamp, level, msg)
+	entry := fmt.Sprintf("%s [%s] %s\n", timestamp, level, msg)
+	writeLogOutput(entry)
+}
+
+var (
+	logLevelPrefixRe  = regexp.MustCompile(`^\[\s*(?:INFO|WARN|WARNING|ERROR|FATAL)\s*\]\s*`)
+	dshNoisyListingRe = regexp.MustCompile(`^\[llm-deepseek-(?:account|api-key)\]\s+model listing from\s+\S+\s+loaded\s+\d+\s+model\(s\), skipped\s+\d+\s+row\(s\)$`)
+)
+
+func writeRawLogLine(msg string) {
+	level := "None"
+	content := msg
+	if match := logLevelPrefixRe.FindString(msg); match != "" {
+		level = strings.Trim(strings.TrimSpace(match), "[]")
+		content = strings.TrimSpace(strings.TrimPrefix(msg, match))
+	}
+	if dshNoisyListingRe.MatchString(content) {
+		return
+	}
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	entry := fmt.Sprintf("%s [%s] %s\n", timestamp, level, content)
+	writeLogOutput(entry)
+}
+
+func writeLogOutput(entry string) {
 	entryLen := int64(len(entry))
 
 	logMu.Lock()
@@ -202,31 +226,15 @@ func cleanLogLine(b []byte) string {
 	return s
 }
 
-// LineLogWriter 行缓冲写入器，将外部子进程流转换为标准逐行日志
+// LineLogWriter 行缓冲写入器，保留外部子进程原生输出
 type LineLogWriter struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	logFunc func(format string, args ...any)
+	mu  sync.Mutex
+	buf bytes.Buffer
 }
 
-// NewLogWriterInfo 创建 INFO 级别行缓冲写入器
-func NewLogWriterInfo() *LineLogWriter {
-	return &LineLogWriter{logFunc: LogInfo}
-}
-
-// NewLogWriterWarn 创建 WARN 级别行缓冲写入器
-func NewLogWriterWarn() *LineLogWriter {
-	return &LineLogWriter{logFunc: LogWarning}
-}
-
-// NewLogWriter 根据级别创建行缓冲写入器
-func NewLogWriter(level string) *LineLogWriter {
-	switch strings.ToUpper(strings.TrimSpace(level)) {
-	case "WARN", "WARNING":
-		return NewLogWriterWarn()
-	default:
-		return NewLogWriterInfo()
-	}
+// NewLogWriter 创建保留外部输出格式的行缓冲写入器
+func NewLogWriter() *LineLogWriter {
+	return &LineLogWriter{}
 }
 
 func (w *LineLogWriter) Write(p []byte) (int, error) {
@@ -243,7 +251,7 @@ func (w *LineLogWriter) Write(p []byte) (int, error) {
 		line := b[:idx]
 		clean := cleanLogLine(line)
 		if clean != "" {
-			w.logFunc("%s", clean)
+			writeRawLogLine(clean)
 		}
 		w.buf.Next(idx + 1)
 	}
@@ -258,7 +266,7 @@ func (w *LineLogWriter) Flush() {
 		clean := cleanLogLine(w.buf.Bytes())
 		w.buf.Reset()
 		if clean != "" {
-			w.logFunc("%s", clean)
+			writeRawLogLine(clean)
 		}
 	}
 }

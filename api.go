@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +33,7 @@ func InitRoutes(r *gin.Engine) {
 		api.GET("/ws", handleWS)
 		api.POST("/action", handleAction)
 		api.GET("/check-update", handleCheckUpdate)
+		api.GET("/deploy/versions", handleListDshVersions)
 		api.GET("/logs", handleGetLogs)
 		api.DELETE("/logs", handleDeleteLogs)
 		api.GET("/logs/download", handleDownloadLogs)
@@ -309,8 +309,9 @@ func handleWS(c *gin.Context) {
 
 func handleAction(c *gin.Context) {
 	var req struct {
-		Action      string `json:"action"`
-		KeepPlugins bool   `json:"keep_plugins"`
+		Action        string `json:"action"`
+		TargetVersion string `json:"target_version"`
+		KeepPlugins   bool   `json:"keep_plugins"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		Fail(c, http.StatusBadRequest, "参数错误")
@@ -347,7 +348,7 @@ func handleAction(c *gin.Context) {
 			Fail(c, actionErrStatus(err), err.Error())
 			return
 		}
-	case "upgrade", "rebuild", "repair", "reset":
+	case "upgrade", "deploy", "repair":
 		if state.Status() == StatusBuilding {
 			Fail(c, http.StatusConflict, "正在部署更新中，请稍候再试")
 			return
@@ -359,15 +360,15 @@ func handleAction(c *gin.Context) {
 		switch req.Action {
 		case "upgrade":
 			Upgrade()
-		case "rebuild":
-			Rebuild()
-		default:
-			tarPath := filepath.Join(globalAppDest, "deepseek-harness.tar.gz")
-			if _, err := os.Stat(tarPath); err != nil {
-				Fail(c, http.StatusBadRequest, "未检测到内置离线安装包，无法执行恢复出厂设置")
+		case "deploy":
+			targetVersion := strings.TrimSpace(req.TargetVersion)
+			if targetVersion == "" {
+				Fail(c, http.StatusBadRequest, "请选择要部署的 DSH 版本")
 				return
 			}
-			RepairEnvironment(req.KeepPlugins)
+			DeployVersion(targetVersion)
+		case "repair":
+			RepairCurrent(req.KeepPlugins)
 		}
 	default:
 		Fail(c, http.StatusBadRequest, "未知操作: "+req.Action)
@@ -384,10 +385,10 @@ func handleAction(c *gin.Context) {
 		msg = "服务正在重启…"
 	case "upgrade":
 		msg = "开始拉取远程更新并部署…"
-	case "rebuild":
-		msg = "开始重新部署 DSH…"
-	case "repair", "reset":
-		msg = "开始恢复出厂设置…"
+	case "deploy":
+		msg = "开始在线部署 DSH…"
+	case "repair":
+		msg = "开始重置修复当前 DSH 版本…"
 	}
 
 	OKMsg(c, msg, statusPayload())
@@ -400,6 +401,15 @@ func handleCheckUpdate(c *gin.Context) {
 		return
 	}
 	OKMsg(c, res.Message, res)
+}
+
+func handleListDshVersions(c *gin.Context) {
+	res, err := ListDshVersions()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	OK(c, res)
 }
 
 // actionErrStatus 将动作前置错误映射为合适的 HTTP 状态码
@@ -555,6 +565,10 @@ func handleSaveConfig(c *gin.Context) {
 	if cfg.ServerPort == cfg.ProxyPort {
 		Fail(c, http.StatusBadRequest, fmt.Sprintf("内部监听端口与反向代理端口不能相同 (%d)", cfg.ServerPort))
 		return
+	}
+
+	if cfg.UpdateChannel != "" {
+		cfg.UpdateChannel = cfg.GetUpdateChannel()
 	}
 
 	oldCfg := GetConfig()

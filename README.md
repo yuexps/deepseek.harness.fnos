@@ -6,7 +6,7 @@
 
 ## 主要功能
 
-- **服务控制**：支持启动、停止、重启、拉取更新与强制重建，内置进程组清理。
+- **服务控制**：支持启动、停止、重启、检查更新与按版本在线部署，内置进程组清理。
 - **插件管理**：支持命令安装（npm 包 / GitHub 仓库）、构建脚本自动放行（allowBuilds）、一键启停与卸载。
 - **工作区查看**：实时同步工作区列表、关联会话数及更新时间，支持在文件管理中一键定位目录。
 - **安全与网关**：支持飞牛统一网关、HTTP 反代与外部自定义地址，提供访问密码鉴权（技术实现详见 [反代适配文档](./REVERSE_PROXY_ADAPTATION.md)）。
@@ -40,7 +40,7 @@
 deepseek.harness/
 ├── harness.go          # 服务生命周期管理与状态机
 ├── process.go          # 进程组控制、孤儿清理、端口等待与巡检自愈
-├── upgrade.go          # NPM包安装与在线更新
+├── upgrade.go          # NPM 版本查询、在线部署与更新
 ├── plugins.go          # 插件解析、安装、启停与安全校验
 ├── profile.go          # 插件运行时补丁与构建策略管理 (cordis.patch.yml / allowBuilds)
 ├── workspace.go        # 工作区数据提取与文件监控
@@ -89,5 +89,8 @@ set GOARCH=amd64
 go build -ldflags "-s -w" -o fnpack/app/bin/deepseek.harness .
 ```
 
-### 3. 生成飞牛 fnOS 安装包
+### 3. 在线部署 DSH
+安装包不再内置 DSH 运行环境。部署应用后，在概览页点击「在线部署」，选择 `v0.2.1-rc.1` 及以上的适配版本进行安装。
+
+### 4. 生成飞牛 fnOS 安装包
 在项目根目录下执行 `build.cmd` 或 `build.sh` 即可生成 `.fpk` 安装包。

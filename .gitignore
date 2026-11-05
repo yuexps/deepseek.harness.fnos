@@ -5,5 +5,4 @@ test
 *.fpk
 fnpack/*.fpk
 fnpack/app/bin/deepseek.harness
-fnpack/app/*.tar.gz
-fnpack/app/*.zip
+fnpack/app/*.zip

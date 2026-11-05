@@ -94,7 +94,10 @@ export const useConfigStore = defineStore('config', () => {
         if (!data.npm_registry) {
           data.npm_registry = 'https://registry.npmmirror.com'
         }
-        if (!data.update_channel) {
+        const storedChannel = String(data.update_channel || '')
+        if (storedChannel === 'stable') {
+          data.update_channel = 'latest'
+        } else if (!['latest', 'alpha', 'next', 'newest'].includes(storedChannel)) {
           data.update_channel = 'latest'
         }
         config.value = { ...data }

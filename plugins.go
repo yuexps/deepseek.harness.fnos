@@ -564,8 +564,8 @@ func handlePluginCancel(c *gin.Context) {
 
 func runPluginSubprocess(cmdArgs []string, timeout time.Duration) error {
 	tail := newTailWriter(800)
-	outWriter := NewLogWriterInfo()
-	errWriter := NewLogWriterWarn()
+	outWriter := NewLogWriter()
+	errWriter := NewLogWriter()
 	defer outWriter.Flush()
 	defer errWriter.Flush()
 
