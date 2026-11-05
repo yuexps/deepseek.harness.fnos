@@ -341,6 +341,7 @@ func installDshFromNpm(targetVersion string) error {
 	args := []string{
 		"install",
 		pkgSpec,
+		"--dangerously-allow-all-scripts",
 		"--no-audit",
 		"--no-fund",
 		"--registry=" + cfg.GetNpmRegistry(),
@@ -378,6 +379,7 @@ func installDshFromNpm(targetVersion string) error {
 	}
 
 	LogInfo("[升级] 核心运行时包安装成功: %s", pkgSpec)
+	go installPnpm()
 	return nil
 }
 

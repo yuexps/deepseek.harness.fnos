@@ -186,7 +186,7 @@
           </div>
           <div class="space-y-1.5">
             <span class="text-slate-500 dark:text-slate-400">选择版本：</span>
-            <n-select v-model:value="selectedDeployVersion" :options="deployVersionOptions" filterable
+            <n-select v-model:value="selectedDeployVersion" :options="deployVersionOptions"
               :loading="isLoadingDeployVersions" :disabled="isLoadingDeployVersions"
               :status="deployVersionsError ? 'error' : undefined" :placeholder="deployVersionPlaceholder"
               size="medium" class="w-full" @update:show="handleDeploySelectShow" />

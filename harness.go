@@ -168,7 +168,7 @@ func InitHarness() {
 	// 常规启动并按上次状态自启
 	refreshVersion()
 	if !isRuntimeReady() {
-		state.SetStatus(StatusStopped, "DSH 运行环境未部署，请选择适配版本在线部署")
+		LogInfo("[部署] DSH 运行环境未部署，请选择适配版本在线部署")
 		return
 	}
 	go installPnpm()
