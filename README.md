@@ -89,8 +89,5 @@ set GOARCH=amd64
 go build -ldflags "-s -w" -o fnpack/app/bin/deepseek.harness .
 ```
 
-### 3. 在线部署 DSH
-安装包不再内置 DSH 运行环境。部署应用后，在概览页点击「在线部署」，选择 `v0.2.1-rc.1` 及以上的适配版本进行安装。
-
-### 4. 生成飞牛 fnOS 安装包
+### 3. 生成飞牛 fnOS 安装包
 在项目根目录下执行 `build.cmd` 或 `build.sh` 即可生成 `.fpk` 安装包。

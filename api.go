@@ -39,6 +39,7 @@ func InitRoutes(r *gin.Engine) {
 		api.GET("/logs/download", handleDownloadLogs)
 		api.GET("/config", handleGetConfig)
 		api.POST("/config", handleSaveConfig)
+		api.POST("/env-file", handlePrepareEnvFile)
 		api.GET("/account/status", handleAccountStatus)
 		api.GET("/account/pool", handleAccountPoolList)
 		api.POST("/account/switch", handleAccountSwitch)
@@ -530,6 +531,15 @@ func handleDownloadLogs(c *gin.Context) {
 
 func handleGetConfig(c *gin.Context) {
 	OK(c, GetConfig())
+}
+
+func handlePrepareEnvFile(c *gin.Context) {
+	envPath, err := EnsureDshEnvFile()
+	if err != nil {
+		Fail(c, http.StatusInternalServerError, "准备环境变量文件失败: "+err.Error())
+		return
+	}
+	OK(c, gin.H{"path": envPath})
 }
 
 // checkPortAvailable 检测 TCP 端口是否可用

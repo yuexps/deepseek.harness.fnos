@@ -135,6 +135,26 @@ func InitAppEnv() {
 	ApplyProxyEnv()
 }
 
+// EnsureDshEnvFile 确保 DSH home 的环境变量文件存在，返回其绝对路径
+func EnsureDshEnvFile() (string, error) {
+	if err := os.MkdirAll(globalDshHome, 0755); err != nil {
+		return "", err
+	}
+	envPath := filepath.Join(globalDshHome, ".env")
+	if _, err := os.Stat(envPath); err == nil {
+		return envPath, nil
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	file, err := os.OpenFile(envPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", err
+	}
+	_ = file.Close()
+	LogInfo("[环境变量] 文件不存在，已自动已创建: %s", envPath)
+	return envPath, nil
+}
+
 // ApplyNpmRegistryEnv 根据当前配置应用 NPM 依赖源环境变量并同步 .npmrc
 func ApplyNpmRegistryEnv() {
 	registry := GetConfig().GetNpmRegistry()

@@ -25,7 +25,7 @@ fi
 DSH_RUN_USER="${wizard_dsh_run_user:-root}"
 [ "${DSH_RUN_USER}" = "package" ] && DSH_RUN_USER="deepseek.harness"
 
-# 确保日志文件本身对目标运行用户可读写
+# 2. 确保日志文件本身对目标运行用户可读写
 if id "${DSH_RUN_USER}" >/dev/null 2>&1 && [ -f "${LOG_FILE}" ]; then
     chown "${DSH_RUN_USER}" "${LOG_FILE}" 2>/dev/null || true
 fi
@@ -55,7 +55,7 @@ if [ -n "${TRIM_APPDEST}" ]; then
     rm -f "${TRIM_APPDEST}/web.sock"
 fi
 
-# 确保日志文件本身对目标运行用户可读写
+# 5. 确保日志文件本身对目标运行用户可读写
 if id "${DSH_RUN_USER}" >/dev/null 2>&1 && [ -f "${LOG_FILE}" ]; then
     chown "${DSH_RUN_USER}" "${LOG_FILE}" 2>/dev/null || true
 fi

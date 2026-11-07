@@ -46,6 +46,19 @@ export const trimSdk = {
     }
   },
 
+  async openFile(path: string): Promise<{ success: boolean; message?: string }> {
+    await this.ready()
+    if (this.isStandaloneWeb) {
+      return { success: false, message: '请在飞牛系统Web桌面内打开' }
+    }
+    try {
+      await this.sdk.openFile(path)
+      return { success: true }
+    } catch (e: any) {
+      return { success: false, message: e?.message || String(e) }
+    }
+  },
+
   async openURL(url: string, target = '_blank'): Promise<void> {
     await this.ready()
     try {

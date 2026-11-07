@@ -61,7 +61,8 @@ export const logApi = {
  */
 export const configApi = {
   getConfig: () => http.get<SettingsConfig>('config'),
-  saveConfig: (config: SettingsConfig) => http.post<SettingsConfig>('config', config)
+  saveConfig: (config: SettingsConfig) => http.post<SettingsConfig>('config', config),
+  prepareEnvFile: () => http.post<{ path: string }>('env-file')
 }
 
 /**

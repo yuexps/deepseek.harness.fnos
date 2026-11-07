@@ -666,6 +666,11 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, '应用设置保存成功', config)
         }
 
+        // 环境变量文件准备
+        if (path.endsWith('/api/env-file') && req.method === 'POST') {
+          return sendJson(res, 0, 'success', { path: `${config.data_library_path}/dsh-data/.env` })
+        }
+
         // 快照管理 Mock
         if (path.endsWith('/api/snapshots') && req.method === 'GET') {
           return sendJson(res, 0, 'success', getMockSnapshotPayload())
