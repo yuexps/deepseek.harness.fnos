@@ -29,6 +29,11 @@ export function viteDevMock(): Plugin {
         build_time: '2026-09-08 23:57'
       }
 
+      let mockEnvVars = [
+        { key: 'DEEPSEEK_API_KEY', value: 'sk-mock-0000000000000000' },
+        { key: 'DSH_LOG_LEVEL', value: 'info' }
+      ]
+
       const workspaces = [
         {
           workspaceId: 'ws-main-deepseek',
@@ -666,9 +671,31 @@ export function viteDevMock(): Plugin {
           return sendJson(res, 0, '应用设置保存成功', config)
         }
 
-        // 环境变量文件准备
-        if (path.endsWith('/api/env-file') && req.method === 'POST') {
-          return sendJson(res, 0, 'success', { path: `${config.data_library_path}/dsh-data/.env` })
+        // 自定义环境变量
+        if (path.endsWith('/api/env-vars') && req.method === 'GET') {
+          return sendJson(res, 0, 'success', { items: mockEnvVars })
+        }
+
+        if (path.endsWith('/api/env-vars') && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const items: Array<{ key?: unknown; value?: unknown }> = Array.isArray(body.items) ? body.items : []
+          const keySet = new Set<string>()
+          for (const item of items) {
+            const key = String(item.key || '').trim()
+            if (key === '') {
+              return sendJson(res, 400, '变量名不能为空', null)
+            }
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+              return sendJson(res, 400, `变量名「${key}」不合法，仅允许字母、数字与下划线，且不能以数字开头`, null)
+            }
+            if (keySet.has(key)) {
+              return sendJson(res, 400, `变量名「${key}」重复`, null)
+            }
+            keySet.add(key)
+          }
+          mockEnvVars = items.map((item) => ({ key: String(item.key).trim(), value: String(item.value ?? '') }))
+          appendLog(`[INFO] 自定义环境变量已保存，共 ${mockEnvVars.length} 项`)
+          return sendJson(res, 0, 'success', { count: mockEnvVars.length })
         }
 
         // 快照管理 Mock

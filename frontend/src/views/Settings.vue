@@ -269,39 +269,6 @@
             </div>
           </n-card>
 
-          <!-- 环境变量卡片 -->
-          <n-card title="环境变量" :bordered="false" class="shadow-sm rounded-2xl">
-            <div class="flex items-center justify-between gap-3">
-              <div class="min-w-0 space-y-1.5">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-sm font-medium text-slate-800 dark:text-slate-100">自定义 DSH 环境变量</span>
-                  <n-tooltip :trigger="isTouch ? 'click' : 'hover'" :keep-alive-on-hover="true"
-                    style="max-width: 300px">
-                    <template #trigger>
-                      <n-icon size="14"
-                        class="text-slate-400 dark:text-slate-500 cursor-help transition-colors active:text-fnos-blue dark:active:text-blue-400">
-                        <Help />
-                      </n-icon>
-                    </template>
-                    <div>
-                      需系统存在可编辑 .env 文件的编辑器，若无法打开该文件，可
-                      <span class="text-fnos-blue dark:text-blue-400 cursor-pointer underline"
-                        @click.stop="handleOpenEditorRepo">安装 PodNote</span>
-                      （基于 Monaco Editor 的轻量文本编辑器）。
-                    </div>
-                  </n-tooltip>
-                </div>
-                <div class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-                  编辑“~/@appdata/deepseek.harness/dsh-data/.env”，保存后需重启服务生效。
-                </div>
-              </div>
-              <n-button size="small" secondary :loading="openingEnvFile" @click="handleOpenEnvFile"
-                class="shrink-0 !h-8 !px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95">
-                打开
-              </n-button>
-            </div>
-          </n-card>
-
           <!-- 重置修复卡片 -->
           <n-card title="重置修复" :bordered="false"
             class="shadow-sm rounded-2xl border border-rose-100 dark:border-rose-950/40">
@@ -359,7 +326,6 @@ import {
 } from '@vicons/tabler'
 import { useConfigStore } from '../stores/config'
 import { useSystemStore } from '../stores/system'
-import { configApi } from '../api'
 import { trimSdk } from '../utils/trimSdk'
 import { useIsTouchDevice } from '../utils/device'
 
@@ -371,7 +337,6 @@ const dialog = useDialog()
 const isTouch = useIsTouchDevice()
 
 const formRef = ref<FormInst | null>(null)
-const openingEnvFile = ref(false)
 
 const {
   config,
@@ -555,29 +520,6 @@ function handleReset() {
   configStore.resetConfig()
   formRef.value?.restoreValidation()
   message.info('已取消修改')
-}
-
-// 打开环境变量文件
-async function handleOpenEnvFile() {
-  openingEnvFile.value = true
-  try {
-    const res = await configApi.prepareEnvFile()
-    if (!res.success || !res.data?.path) {
-      message.error(res.success ? '未获取到环境变量文件路径' : res.message || '准备环境变量文件失败')
-      return
-    }
-    const opened = await trimSdk.openFile(res.data.path)
-    if (!opened.success) {
-      message.error(opened.message || '打开环境变量文件失败')
-    }
-  } finally {
-    openingEnvFile.value = false
-  }
-}
-
-// 前往推荐文本编辑器的安装页
-function handleOpenEditorRepo() {
-  void trimSdk.openURL('https://github.com/yuexps/m.text.editor')
 }
 
 // 重置修复确认弹窗

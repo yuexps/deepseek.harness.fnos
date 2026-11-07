@@ -123,6 +123,74 @@
           </div>
         </div>
       </n-card>
+
+      <!-- 2. 自定义环境变量卡片 -->
+      <n-card :bordered="false" class="shadow-sm rounded-2xl overflow-hidden">
+        <template #header>
+          <div class="flex flex-wrap items-center justify-between gap-2 w-full min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-sm sm:text-base font-semibold text-slate-800 dark:text-slate-100">环境变量</span>
+              <n-tag size="small" round :bordered="false" class="font-medium text-xs shrink-0">
+                {{ envRows.length }} 项
+              </n-tag>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <n-button secondary :size="fieldSize" :disabled="isEnvBusy" @click="handleAddEnvRow"
+                class="!px-3 rounded-xl font-medium transition-transform duration-150 active:scale-95">
+                <template #icon>
+                  <n-icon :size="14">
+                    <Plus />
+                  </n-icon>
+                </template>
+                添加
+              </n-button>
+              <n-button type="primary" secondary :size="fieldSize" :loading="isSavingEnv" :disabled="isEnvBusy"
+                @click="handleSaveEnvRows"
+                class="!px-3.5 rounded-xl font-medium transition-transform duration-150 active:scale-95">
+                保存
+              </n-button>
+            </div>
+          </div>
+        </template>
+
+        <div v-if="isLoadingEnv" class="flex justify-center py-6">
+          <n-spin size="small" />
+        </div>
+        <template v-else>
+          <div v-if="envRows.length === 0" class="py-5 text-center text-xs text-slate-400 dark:text-slate-500">
+            暂无自定义变量，点击右上角「添加」新建。
+          </div>
+          <div v-else class="space-y-2">
+            <div
+              class="hidden sm:grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-2 text-xs font-medium text-slate-400 dark:text-slate-500">
+              <span>名称</span>
+              <span>值</span>
+              <span></span>
+            </div>
+            <!-- 移动端：变量名与删除按钮同行、变量值独占一行 -->
+            <div v-for="row in envRows" :key="row.uid"
+              class="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] gap-2 items-center">
+              <n-input v-model:value="row.key" :size="fieldSize" placeholder="变量名，如 DEEPSEEK_API_KEY"
+                class="col-start-1 row-start-1" />
+              <n-input v-model:value="row.value" :size="fieldSize" placeholder="变量值"
+                :type="isSensitiveEnvKey(row.key) ? 'password' : 'text'" show-password-on="click"
+                class="col-span-2 col-start-1 row-start-2 sm:col-span-1 sm:col-start-2 sm:row-start-1" />
+              <n-button quaternary circle :size="fieldSize" :disabled="isEnvBusy" @click="handleRemoveEnvRow(row.uid)"
+                class="col-start-2 row-start-1 sm:col-start-3">
+                <template #icon>
+                  <n-icon :size="15">
+                    <Trash />
+                  </n-icon>
+                </template>
+              </n-button>
+            </div>
+          </div>
+
+          <div class="pt-3 text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+            写入 <span class="font-mono">dsh-data/.env</span>，保存后需重启服务生效。
+          </div>
+        </template>
+      </n-card>
     </div>
 
     <!-- 切换 DeepSeek 账号弹窗 -->
@@ -266,7 +334,8 @@ import {
   NAvatar,
   NSpin,
   NPopconfirm,
-  useMessage
+  useMessage,
+  useDialog
 } from 'naive-ui'
 import {
   BrandNytimes,
@@ -276,12 +345,15 @@ import {
   Trash,
   User
 } from '@vicons/tabler'
-import { accountApi } from '../api'
+import { accountApi, configApi } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { trimSdk } from '../utils/trimSdk'
+import { useIsTouchDevice } from '../utils/device'
 
 const message = useMessage()
+const dialog = useDialog()
 const authStore = useAuthStore()
+const isTouch = useIsTouchDevice()
 
 const refreshing = computed(() => authStore.refreshing)
 const accountStatus = computed(() => authStore.accountStatus)
@@ -334,16 +406,34 @@ const loggingOutAccount = ref(false)
 const loginAuthUrl = ref('')
 const callbackUrlInput = ref('')
 
-// 手动刷新账号状态
+// 手动刷新账号状态与环境变量
 async function handleManualRefresh() {
-  const [statusOk, poolOk] = await Promise.all([
+  if (isEnvDirty.value) {
+    dialog.warning({
+      title: '放弃未保存的修改？',
+      content: '环境变量有未保存的修改，刷新后将恢复为已保存的内容。',
+      positiveText: '继续刷新',
+      negativeText: '取消',
+      onPositiveClick: () => {
+        void refreshPageData()
+      }
+    })
+    return
+  }
+  await refreshPageData()
+}
+
+// 重新拉取本页数据
+async function refreshPageData() {
+  const [statusOk, poolOk, envOk] = await Promise.all([
     authStore.fetchAccountStatus(false),
-    authStore.fetchAccountPool(true)
+    authStore.fetchAccountPool(true),
+    loadEnvVars()
   ])
-  if (statusOk || poolOk) {
-    message.success('账号状态已更新')
+  if (statusOk || poolOk || envOk) {
+    message.success('账号与环境变量已刷新')
   } else {
-    message.error('获取账号状态失败')
+    message.error('刷新失败，请稍后重试')
   }
 }
 
@@ -436,9 +526,124 @@ async function handleAccountLogout() {
   }
 }
 
+// 环境变量行编辑模型
+interface EnvRow {
+  uid: number
+  key: string
+  value: string
+}
+
+// 变量名格式：字母、数字、下划线，且不能以数字开头
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+const envRows = ref<EnvRow[]>([])
+// 最近一次与后端保持一致的环境变量快照，用于判断未保存修改
+const envBaseline = ref('')
+const isLoadingEnv = ref(false)
+const isSavingEnv = ref(false)
+const isEnvBusy = computed(() => isLoadingEnv.value || isSavingEnv.value)
+// 触屏设备使用更大控件尺寸，保证点击区域
+const fieldSize = computed<'small' | 'medium'>(() => (isTouch.value ? 'medium' : 'small'))
+let envRowSeed = 0
+
+const isEnvDirty = computed(() => serializeEnvRows(envRows.value) !== envBaseline.value)
+
+// 序列化变量行，忽略全空行
+function serializeEnvRows(rows: EnvRow[]): string {
+  return JSON.stringify(
+    rows
+      .filter((row) => row.key.trim() !== '' || row.value !== '')
+      .map((row) => [row.key.trim(), row.value])
+  )
+}
+
+// 敏感变量名默认掩码显示
+function isSensitiveEnvKey(key: string) {
+  return /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|COOKIE|AUTH/i.test(key)
+}
+
+// 加载自定义环境变量，返回是否成功
+async function loadEnvVars(): Promise<boolean> {
+  isLoadingEnv.value = true
+  try {
+    const res = await configApi.getEnvVars()
+    if (!res.success || !res.data) {
+      message.error(res.message || '读取环境变量失败')
+      return false
+    }
+    envRows.value = (res.data.items || []).map((item) => ({
+      uid: ++envRowSeed,
+      key: item.key,
+      value: item.value
+    }))
+    envBaseline.value = serializeEnvRows(envRows.value)
+    return true
+  } finally {
+    isLoadingEnv.value = false
+  }
+}
+
+// 新增一行变量
+function handleAddEnvRow() {
+  envRows.value.push({ uid: ++envRowSeed, key: '', value: '' })
+}
+
+// 删除指定变量行
+function handleRemoveEnvRow(uid: number) {
+  envRows.value = envRows.value.filter((row) => row.uid !== uid)
+}
+
+// 校验变量行，返回错误文案
+function validateEnvRows(rows: EnvRow[]): string {
+  const keySet = new Set<string>()
+  for (const row of rows) {
+    const key = row.key.trim()
+    if (key === '' && row.value === '') {
+      continue
+    }
+    if (key === '') {
+      return '变量名不能为空'
+    }
+    if (!ENV_KEY_PATTERN.test(key)) {
+      return `变量名「${key}」不合法，仅允许字母、数字与下划线，且不能以数字开头`
+    }
+    if (keySet.has(key)) {
+      return `变量名「${key}」重复`
+    }
+    keySet.add(key)
+  }
+  return ''
+}
+
+// 保存自定义环境变量
+async function handleSaveEnvRows() {
+  const errorMessage = validateEnvRows(envRows.value)
+  if (errorMessage) {
+    message.error(errorMessage)
+    return
+  }
+
+  isSavingEnv.value = true
+  try {
+    const validRows = envRows.value.filter((row) => row.key.trim() !== '' || row.value !== '')
+    const items = validRows.map((row) => ({ key: row.key.trim(), value: row.value }))
+    const res = await configApi.saveEnvVars(items)
+    if (!res.success) {
+      message.error(res.message || '保存环境变量失败')
+      return
+    }
+    envRows.value = validRows.map((row) => ({ ...row, key: row.key.trim() }))
+    envBaseline.value = serializeEnvRows(envRows.value)
+    message.success(`已保存 ${items.length} 项环境变量，重启服务后生效`)
+  } finally {
+    isSavingEnv.value = false
+  }
+}
+
 onMounted(() => {
   authStore.fetchAccountStatus(true)
   authStore.fetchAccountPool(true)
+  void loadEnvVars()
 })
 
 onActivated(() => {

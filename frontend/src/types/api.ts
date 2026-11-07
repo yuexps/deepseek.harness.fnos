@@ -149,6 +149,21 @@ export interface LogData {
 }
 
 /**
+ * 自定义环境变量项
+ */
+export interface EnvVarItem {
+  key: string
+  value: string
+}
+
+/**
+ * 环境变量列表响应
+ */
+export interface EnvVarListPayload {
+  items: EnvVarItem[]
+}
+
+/**
  * 应用设置配置模型
  */
 export interface SettingsConfig {

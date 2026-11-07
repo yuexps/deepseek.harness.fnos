@@ -215,6 +215,18 @@ jobs:
           
           X86_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-x86.fpk"
           ARM_URL="https://github.com/yuexps/deepseek.harness.fnos/releases/download/${TAG_NAME}/${{ env.BIN_NAME }}-arm.fpk"
+
+          PREV_TAG=$(git tag -l "v*" --sort=-v:refname | grep -E '^v[0-9]' | grep -v "^${TAG_NAME}$" | head -n 1)
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --no-merges --pretty=format:"%s")
+          else
+            COMMITS=$(git log HEAD --no-merges --pretty=format:"%s" -n 20)
+          fi
+          # 合并为单行，避免依赖前端换行渲染
+          CHANGELOG=$(printf '%s\n' "$COMMITS" | awk 'NF { printf "%s%s", sep, $0; sep="；" }')
+          if [ -z "$CHANGELOG" ]; then
+            CHANGELOG="解决了一些已知问题。"
+          fi
           
           TARGET_REPOS=("yuexps/FnDepot")
 
@@ -238,18 +250,21 @@ jobs:
                  --arg arm_url "$ARM_URL" \
                  --arg arm_sha "$ARM_SHA256" \
                  --argjson arm_size "$ARM_SIZE" \
+                 --arg changelog "$CHANGELOG" \
                  '
                  .apps["deepseek.harness"].releases[$ver] = {
                    "packages": {
                      "x86": {
                        "download_url": $x86_url,
                        "sha256": $x86_sha,
-                       "size": $x86_size
+                       "size": $x86_size,
+                       "changelog": $changelog
                      },
                      "arm": {
                        "download_url": $arm_url,
                        "sha256": $arm_sha,
-                       "size": $arm_size
+                       "size": $arm_size,
+                       "changelog": $changelog
                      }
                    }
                  }

@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -153,6 +155,180 @@ func EnsureDshEnvFile() (string, error) {
 	_ = file.Close()
 	LogInfo("[环境变量] 文件不存在，已自动已创建: %s", envPath)
 	return envPath, nil
+}
+
+// EnvVarItem 环境变量文件中的一条键值对
+type EnvVarItem struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// reservedEnvNames 仅允许由启动环境设置的变量名，写入 .env 会使 DSH 启动失败
+var reservedEnvNames = map[string]struct{}{
+	"PATH": {}, "HOME": {}, "USERPROFILE": {}, "SHELL": {},
+	"NODE_OPTIONS": {}, "NODE_PATH": {}, "NODE_EXTRA_CA_CERTS": {},
+	"LD_PRELOAD": {}, "LD_LIBRARY_PATH": {}, "LD_AUDIT": {},
+	"BASH_ENV": {}, "ENV": {}, "SHELLOPTS": {}, "BASHOPTS": {},
+	"PERL5OPT": {}, "PERL5LIB": {}, "PYTHONSTARTUP": {}, "PYTHONPATH": {},
+	"RUBYOPT": {}, "RUBYLIB": {},
+	"JAVA_TOOL_OPTIONS": {}, "_JAVA_OPTIONS": {}, "JDK_JAVA_OPTIONS": {}, "PYTHONHOME": {},
+	"GIT_SSH": {}, "GIT_SSH_COMMAND": {}, "GIT_EXTERNAL_DIFF": {}, "GIT_PAGER": {},
+	"GIT_EDITOR": {}, "GIT_ASKPASS": {}, "SSH_ASKPASS": {},
+	"GIT_CONFIG_GLOBAL": {}, "GIT_CONFIG_SYSTEM": {}, "GIT_CONFIG_COUNT": {},
+	"EDITOR": {}, "VISUAL": {}, "PAGER": {}, "BROWSER": {},
+	"DEEPSEEK_BASE_URL": {}, "DEEPSEEK_SEARCH_BASE_URL": {},
+	"SSL_CERT_FILE": {}, "SSL_CERT_DIR": {},
+	"REQUESTS_CA_BUNDLE": {}, "CURL_CA_BUNDLE": {}, "NODE_TLS_REJECT_UNAUTHORIZED": {},
+}
+
+// reservedEnvPrefixes 仅允许由启动环境设置的变量名前缀
+var reservedEnvPrefixes = []string{"DSH_", "XDG_", "DYLD_", "BASH_FUNC_"}
+
+// homeProxyEnvNames 环境变量文件所在层允许设置的代理变量
+var homeProxyEnvNames = map[string]struct{}{
+	"HTTP_PROXY": {}, "HTTPS_PROXY": {}, "ALL_PROXY": {}, "NO_PROXY": {},
+}
+
+// isReservedEnvName 判断变量名是否只能由启动环境设置
+func isReservedEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	if _, isProxy := homeProxyEnvNames[upper]; isProxy {
+		return false
+	}
+	if _, isReserved := reservedEnvNames[upper]; isReserved {
+		return true
+	}
+	for _, prefix := range reservedEnvPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateEnvVars 校验环境变量键值对合法性
+func ValidateEnvVars(items []EnvVarItem) error {
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.Key)
+		if key == "" {
+			return fmt.Errorf("变量名不能为空")
+		}
+		if !envKeyPattern.MatchString(key) {
+			return fmt.Errorf("变量名「%s」不合法，仅允许字母、数字与下划线，且不能以数字开头", item.Key)
+		}
+		if isReservedEnvName(key) {
+			return fmt.Errorf("变量名「%s」只能由服务启动环境设置，写入 .env 会导致 DSH 启动失败", key)
+		}
+		if _, exists := seen[key]; exists {
+			return fmt.Errorf("变量名「%s」重复", key)
+		}
+		seen[key] = struct{}{}
+		if strings.ContainsAny(item.Value, "\r\n") {
+			return fmt.Errorf("变量「%s」的值不能包含换行", key)
+		}
+	}
+	return nil
+}
+
+// ReadDshEnvVars 读取环境变量文件中的键值对
+func ReadDshEnvVars() ([]EnvVarItem, error) {
+	envPath, err := EnsureDshEnvFile()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(envPath)
+	if err != nil {
+		return nil, err
+	}
+	items, _ := parseDshEnv(string(raw))
+	return items, nil
+}
+
+// WriteDshEnvVars 覆盖写入环境变量文件，顶部原样保留注释与无法识别的行
+func WriteDshEnvVars(items []EnvVarItem) error {
+	envPath, err := EnsureDshEnvFile()
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(envPath)
+	if err != nil {
+		return err
+	}
+	_, preserved := parseDshEnv(string(raw))
+
+	lines := make([]string, 0, len(preserved)+len(items)+1)
+	lines = append(lines, preserved...)
+	if len(preserved) > 0 && len(items) > 0 {
+		lines = append(lines, "")
+	}
+	for _, item := range items {
+		lines = append(lines, strings.TrimSpace(item.Key)+"="+quoteEnvValue(item.Value))
+	}
+
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return os.WriteFile(envPath, []byte(content), 0600)
+}
+
+// parseDshEnv 解析环境变量文本，返回键值对与需原样保留的行
+func parseDshEnv(raw string) ([]EnvVarItem, []string) {
+	items := make([]EnvVarItem, 0, 8)
+	preserved := make([]string, 0, 4)
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			preserved = append(preserved, line)
+			continue
+		}
+		if rest, found := strings.CutPrefix(line, "export "); found {
+			line = strings.TrimSpace(rest)
+		}
+		key, value, found := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !found || !envKeyPattern.MatchString(key) {
+			preserved = append(preserved, line)
+			continue
+		}
+		items = append(items, EnvVarItem{Key: key, Value: unquoteEnvValue(strings.TrimSpace(value))})
+	}
+	return items, preserved
+}
+
+// quoteEnvValue 对含特殊字符的值加双引号并转义，避免被解析为注释或截断
+func quoteEnvValue(value string) string {
+	if value == "" {
+		return ""
+	}
+	if !strings.ContainsAny(value, "\"'#\\") && value == strings.TrimSpace(value) {
+		return value
+	}
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
+}
+
+// unquoteEnvValue 剥离成对引号并还原转义字符
+func unquoteEnvValue(value string) string {
+	if len(value) < 2 {
+		return value
+	}
+	if value[0] == '"' && value[len(value)-1] == '"' {
+		inner := value[1 : len(value)-1]
+		inner = strings.ReplaceAll(inner, `\"`, `"`)
+		return strings.ReplaceAll(inner, `\\`, `\`)
+	}
+	if value[0] == '\'' && value[len(value)-1] == '\'' {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 // ApplyNpmRegistryEnv 根据当前配置应用 NPM 依赖源环境变量并同步 .npmrc

@@ -39,7 +39,8 @@ func InitRoutes(r *gin.Engine) {
 		api.GET("/logs/download", handleDownloadLogs)
 		api.GET("/config", handleGetConfig)
 		api.POST("/config", handleSaveConfig)
-		api.POST("/env-file", handlePrepareEnvFile)
+		api.GET("/env-vars", handleGetEnvVars)
+		api.POST("/env-vars", handleSaveEnvVars)
 		api.GET("/account/status", handleAccountStatus)
 		api.GET("/account/pool", handleAccountPoolList)
 		api.POST("/account/switch", handleAccountSwitch)
@@ -533,13 +534,35 @@ func handleGetConfig(c *gin.Context) {
 	OK(c, GetConfig())
 }
 
-func handlePrepareEnvFile(c *gin.Context) {
-	envPath, err := EnsureDshEnvFile()
+// handleGetEnvVars 读取自定义环境变量
+func handleGetEnvVars(c *gin.Context) {
+	items, err := ReadDshEnvVars()
 	if err != nil {
-		Fail(c, http.StatusInternalServerError, "准备环境变量文件失败: "+err.Error())
+		Fail(c, http.StatusInternalServerError, "读取环境变量文件失败: "+err.Error())
 		return
 	}
-	OK(c, gin.H{"path": envPath})
+	OK(c, gin.H{"items": items})
+}
+
+// handleSaveEnvVars 覆盖保存自定义环境变量
+func handleSaveEnvVars(c *gin.Context) {
+	var req struct {
+		Items []EnvVarItem `json:"items"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		Fail(c, http.StatusBadRequest, "参数错误: "+err.Error())
+		return
+	}
+	if err := ValidateEnvVars(req.Items); err != nil {
+		Fail(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := WriteDshEnvVars(req.Items); err != nil {
+		Fail(c, http.StatusInternalServerError, "保存环境变量失败: "+err.Error())
+		return
+	}
+	LogInfo("[环境变量] 已保存 %d 项自定义变量", len(req.Items))
+	OK(c, gin.H{"count": len(req.Items)})
 }
 
 // checkPortAvailable 检测 TCP 端口是否可用

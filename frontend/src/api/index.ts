@@ -13,7 +13,9 @@ import type {
   SnapshotMeta,
   CreateSnapshotParams,
   DshAccountStatus,
-  AccountPublicInfo
+  AccountPublicInfo,
+  EnvVarItem,
+  EnvVarListPayload
 } from '../types/api'
 
 /**
@@ -62,7 +64,8 @@ export const logApi = {
 export const configApi = {
   getConfig: () => http.get<SettingsConfig>('config'),
   saveConfig: (config: SettingsConfig) => http.post<SettingsConfig>('config', config),
-  prepareEnvFile: () => http.post<{ path: string }>('env-file')
+  getEnvVars: () => http.get<EnvVarListPayload>('env-vars'),
+  saveEnvVars: (items: EnvVarItem[]) => http.post<{ count: number }>('env-vars', { items })
 }
 
 /**
